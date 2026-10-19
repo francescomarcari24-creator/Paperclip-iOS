@@ -1,0 +1,77 @@
+name: Build Paperclip iOS (.ipa)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    name: Build Unsigned IPA for Sideloadly / SideStore
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen &> /dev/null; then
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode Project
+        run: |
+          if [ -f "project.yml" ]; then
+            xcodegen generate
+          elif [ -f "ios/project.yml" ]; then
+            cd ios && xcodegen generate
+          fi
+
+      - name: Build Paperclip.app (Release, Unsigned)
+        run: |
+          PROJECT_PATH="Paperclip.xcodeproj"
+          if [ ! -d "$PROJECT_PATH" ] && [ -d "ios/Paperclip.xcodeproj" ]; then
+            PROJECT_PATH="ios/Paperclip.xcodeproj"
+          fi
+
+          xcodebuild build \
+            -project "$PROJECT_PATH" \
+            -scheme Paperclip \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package Paperclip.ipa
+        run: |
+          APP_PATH=$(find build/DerivedData -name "Paperclip.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Errore: Paperclip.app non trovato!"
+            exit 1
+          fi
+          echo "Trovato bundle in: $APP_PATH"
+          rm -rf build/ipa
+          mkdir -p build/ipa/Payload
+          cp -R "$APP_PATH" build/ipa/Payload/Paperclip.app
+          cd build/ipa
+          zip -r -9 Paperclip.ipa Payload
+          ls -lh Paperclip.ipa
+
+      - name: Upload Paperclip.ipa Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Paperclip-iOS-IPA
+          path: build/ipa/Paperclip.ipa
+          if-no-files-found: error
+          retention-days: 30

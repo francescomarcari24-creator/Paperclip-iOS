@@ -1,0 +1,54 @@
+name: Paperclip
+options:
+  bundleIdPrefix: com.project
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1"
+    INFOPLIST_FILE: Paperclip/Info.plist
+    PRODUCT_BUNDLE_IDENTIFIER: com.project.paperclip
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    ENABLE_BITCODE: NO
+
+targets:
+  Paperclip:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Paperclip
+        excludes:
+          - "Info.plist"
+    settings:
+      base:
+        PRODUCT_NAME: Paperclip
+        PRODUCT_BUNDLE_IDENTIFIER: com.project.paperclip
+        INFOPLIST_FILE: Paperclip/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    dependencies:
+      - sdk: libsqlite3.tbd
+      - sdk: libz.tbd
+      - sdk: WebKit.framework
+      - sdk: PDFKit.framework
+      - sdk: Vision.framework
+      - sdk: VisionKit.framework
+      - sdk: Speech.framework
+      - sdk: AVFoundation.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: Network.framework
+      - sdk: UserNotifications.framework
+      - sdk: PencilKit.framework
+      - sdk: CryptoKit.framework
+      - sdk: Security.framework

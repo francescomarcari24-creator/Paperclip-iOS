@@ -1,0 +1,465 @@
+import SwiftUI
+
+enum MainTab: String, CaseIterable {
+    case feed = "Feed"
+    case archive = "Archivio"
+    case folders = "Cartelle"
+    case trash = "Cestino"
+    case settings = "Impostazioni"
+}
+
+struct MainNavigationView: View {
+    @ObservedObject var viewModel: MainViewModel
+    @ObservedObject private var preferences = UiPreferences.shared
+    @Environment(\.paperclipPalette) private var palette
+
+    @State private var selectedTab: MainTab = .feed
+    @State private var showingAddSheet: Bool = false
+    @State private var initialAddType: ItemType = .NOTE
+    @State private var selectedItemForDetail: ArchiveItemWithDetails? = nil
+    @State private var itemToEdit: ArchiveItemWithDetails? = nil
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            TabView(selection: $selectedTab) {
+                feedTab
+                    .tabItem {
+                        Label("Feed", systemImage: "tray.full.fill")
+                    }
+                    .tag(MainTab.feed)
+
+                archiveTab
+                    .tabItem {
+                        Label("Archivio", systemImage: "archivebox.fill")
+                    }
+                    .tag(MainTab.archive)
+
+                FoldersAndTagsView(viewModel: viewModel)
+                    .tabItem {
+                        Label("Cartelle", systemImage: "folder.fill")
+                    }
+                    .tag(MainTab.folders)
+
+                TrashView(viewModel: viewModel)
+                    .tabItem {
+                        Label("Cestino", systemImage: "trash.fill")
+                    }
+                    .tag(MainTab.trash)
+
+                SettingsView(viewModel: viewModel)
+                    .tabItem {
+                        Label("Impostazioni", systemImage: "gearshape.fill")
+                    }
+                    .tag(MainTab.settings)
+            }
+
+            if let undo = viewModel.activeUndo {
+                HStack(spacing: 12) {
+                    Text(undo.message)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Button("Annulla") {
+                        withAnimation {
+                            viewModel.performUndo()
+                        }
+                    }
+                    .font(.subheadline.bold())
+                    .foregroundColor(palette.primaryContainer)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color.black.opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 64)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .sheet(isPresented: $showingAddSheet) {
+            AddEditItemView(viewModel: viewModel, existingEntry: nil, defaultType: initialAddType)
+        }
+        .sheet(item: $itemToEdit) { entry in
+            AddEditItemView(viewModel: viewModel, existingEntry: entry, defaultType: entry.item.itemType)
+        }
+        .sheet(item: $selectedItemForDetail) { entry in
+            let currentEntry = viewModel.allItemsWithDetails.first(where: { $0.id == entry.id }) ?? entry
+            ItemDetailView(
+                viewModel: viewModel,
+                entry: currentEntry,
+                onEdit: {
+                    selectedItemForDetail = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        itemToEdit = currentEntry
+                    }
+                }
+            )
+        }
+    }
+
+    // MARK: - Feed Tab
+
+    private var feedTab: some View {
+        NavigationStack {
+            ZStack(alignment: .bottomTrailing) {
+                palette.background.ignoresSafeArea()
+
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        if preferences.showFeedFilters {
+                            filterBarSection
+                        }
+
+                        if !viewModel.resurfacedItems.isEmpty {
+                            resurfaceSection
+                        }
+
+                        let items = viewModel.feedItems
+                        if items.isEmpty {
+                            emptyFeedPlaceholder
+                        } else {
+                            ForEach(items) { entry in
+                                FeedCardView(
+                                    viewModel: viewModel,
+                                    entry: entry,
+                                    onTap: {
+                                        if entry.item.isPrivate && !viewModel.privateUnlocked {
+                                            viewModel.unlockPrivateItems()
+                                        } else {
+                                            viewModel.markOpened(entry.item)
+                                            selectedItemForDetail = entry
+                                        }
+                                    },
+                                    onEdit: {
+                                        itemToEdit = entry
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 96)
+                }
+                .searchable(text: $viewModel.searchQuery, prompt: "Cerca in Paperclip…")
+
+                Menu {
+                    Button {
+                        initialAddType = .NOTE
+                        showingAddSheet = true
+                    } label: {
+                        Label("Nuova nota", systemImage: "note.text")
+                    }
+                    Button {
+                        initialAddType = .CHECKLIST
+                        showingAddSheet = true
+                    } label: {
+                        Label("Nuova checklist", systemImage: "checklist")
+                    }
+                    Button {
+                        initialAddType = .LINK
+                        showingAddSheet = true
+                    } label: {
+                        Label("Nuovo link", systemImage: "link")
+                    }
+                    Button {
+                        initialAddType = .PHOTO
+                        showingAddSheet = true
+                    } label: {
+                        Label("Foto / Media / PDF", systemImage: "photo.on.rectangle")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.title2.bold())
+                        .foregroundColor(palette.onPrimary)
+                        .frame(width: 58, height: 58)
+                        .background(palette.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .shadow(color: Color.black.opacity(0.22), radius: 8, x: 0, y: 4)
+                }
+                .padding(.trailing, 20)
+                .padding(.bottom, 20)
+            }
+            .navigationTitle("Paperclip")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if viewModel.allItemsWithDetails.contains(where: { $0.item.isPrivate && $0.item.deletedAt == nil }) {
+                        Button {
+                            if viewModel.privateUnlocked {
+                                viewModel.lockPrivateItems()
+                            } else {
+                                viewModel.unlockPrivateItems()
+                            }
+                        } label: {
+                            Image(systemName: viewModel.privateUnlocked ? "lock.open.fill" : "lock.fill")
+                        }
+                        .accessibilityLabel(viewModel.privateUnlocked ? "Blocca elementi privati" : "Sblocca elementi privati")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    HStack(spacing: 12) {
+                        Button {
+                            withAnimation {
+                                preferences.showFeedFilters.toggle()
+                            }
+                        } label: {
+                            Image(systemName: preferences.showFeedFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        }
+
+                        Menu {
+                            Picker("Ordina per", selection: $preferences.sortOrder) {
+                                ForEach(SortOrder.allCases) { order in
+                                    Text(order.label).tag(order)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down.circle")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Filter Bar
+
+    private var filterBarSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    FilterChip(
+                        title: "Tutti",
+                        icon: "square.grid.2x2",
+                        isSelected: viewModel.selectedType == nil && !viewModel.pinnedOnly && !viewModel.unreadOnly
+                    ) {
+                        viewModel.selectedType = nil
+                        viewModel.pinnedOnly = false
+                        viewModel.unreadOnly = false
+                    }
+
+                    FilterChip(
+                        title: "Fissati",
+                        icon: "pin.fill",
+                        isSelected: viewModel.pinnedOnly
+                    ) {
+                        viewModel.pinnedOnly.toggle()
+                    }
+
+                    FilterChip(
+                        title: "Da leggere",
+                        icon: "book.closed.fill",
+                        isSelected: viewModel.unreadOnly
+                    ) {
+                        viewModel.unreadOnly.toggle()
+                    }
+
+                    ForEach(ItemType.allCases) { type in
+                        FilterChip(
+                            title: type.pluralLabel,
+                            icon: type.systemIcon,
+                            isSelected: viewModel.selectedType == type
+                        ) {
+                            viewModel.selectedType = (viewModel.selectedType == type) ? nil : type
+                        }
+                    }
+                }
+            }
+
+            if !viewModel.folders.isEmpty || !viewModel.tags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if !viewModel.folders.isEmpty {
+                            Menu {
+                                Button("Tutte le cartelle") {
+                                    viewModel.selectedFolderId = nil
+                                }
+                                Divider()
+                                ForEach(viewModel.folderTree.entries) { entry in
+                                    let prefix = String(repeating: "  ", count: entry.depth)
+                                    Button("\(prefix)📁 \(entry.folder.name)") {
+                                        viewModel.selectedFolderId = entry.folder.id
+                                    }
+                                }
+                            } label: {
+                                let label = viewModel.selectedFolderId.flatMap { viewModel.folderTree.pathLabel($0) } ?? "Cartella"
+                                FilterChipLabel(
+                                    title: label,
+                                    icon: "folder.fill",
+                                    isSelected: viewModel.selectedFolderId != nil
+                                )
+                            }
+                        }
+
+                        ForEach(viewModel.tags) { tag in
+                            FilterChip(
+                                title: "#\(tag.name)",
+                                icon: nil,
+                                isSelected: viewModel.selectedTagIds.contains(tag.id)
+                            ) {
+                                viewModel.toggleTagFilter(tag.id)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Resurface ("Riscopri") Section
+
+    private var resurfaceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Riscopri", systemImage: "sparkles")
+                    .font(.subheadline.bold())
+                    .foregroundColor(palette.primary)
+                Spacer()
+                Button("Nascondi tutti") {
+                    for entry in viewModel.resurfacedItems {
+                        viewModel.dismissedResurfacedIds.insert(entry.id)
+                    }
+                }
+                .font(.caption)
+            }
+
+            ForEach(viewModel.resurfacedItems) { entry in
+                HStack {
+                    Image(systemName: entry.item.itemType.systemIcon)
+                        .foregroundColor(palette.primary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.item.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text(entry.item.itemType.label)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        viewModel.dismissedResurfacedIds.insert(entry.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(10)
+                .background(palette.primaryContainer.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture {
+                    selectedItemForDetail = entry
+                }
+            }
+        }
+        .padding(12)
+        .background(palette.surfaceContainer)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var emptyFeedPlaceholder: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "paperclip")
+                .font(.system(size: 48))
+                .foregroundColor(palette.primary.opacity(0.6))
+            Text(viewModel.narrowsFeed ? "Nessun elemento corrisponde ai filtri" : "Il tuo archivio è vuoto")
+                .font(.headline)
+                .foregroundColor(palette.onSurface)
+            Text(viewModel.narrowsFeed ? "Prova a modificare la ricerca o i filtri selezionati." : "Tocca il pulsante + in basso a destra per aggiungere una nota, una checklist, un link o un file.")
+                .font(.subheadline)
+                .foregroundColor(palette.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 64)
+    }
+
+    // MARK: - Archive Tab
+
+    private var archiveTab: some View {
+        NavigationStack {
+            ZStack {
+                palette.background.ignoresSafeArea()
+                let items = viewModel.archivedItems
+                if items.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 44))
+                            .foregroundColor(.secondary)
+                        Text("Nessun elemento archiviato")
+                            .font(.headline)
+                        Text("Scorri verso sinistra su una scheda nel feed per archiviarla.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                    }
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(items) { entry in
+                                FeedCardView(
+                                    viewModel: viewModel,
+                                    entry: entry,
+                                    onTap: {
+                                        if entry.item.isPrivate && !viewModel.privateUnlocked {
+                                            viewModel.unlockPrivateItems()
+                                        } else {
+                                            selectedItemForDetail = entry
+                                        }
+                                    },
+                                    onEdit: {
+                                        itemToEdit = entry
+                                    }
+                                )
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+            }
+            .navigationTitle("Archivio")
+        }
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let icon: String?
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            FilterChipLabel(title: title, icon: icon, isSelected: isSelected)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct FilterChipLabel: View {
+    @Environment(\.paperclipPalette) private var palette
+    let title: String
+    let icon: String?
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon = icon {
+                Image(systemName: icon)
+                    .font(.caption)
+            }
+            Text(title)
+                .font(.caption.weight(.medium))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(isSelected ? palette.primaryContainer : palette.surfaceContainer)
+        .foregroundColor(isSelected ? palette.onPrimaryContainer : palette.onSurfaceVariant)
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .stroke(isSelected ? palette.primary : palette.outline.opacity(0.3), lineWidth: 1)
+        )
+    }
+}
