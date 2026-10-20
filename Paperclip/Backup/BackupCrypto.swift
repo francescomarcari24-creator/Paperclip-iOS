@@ -222,7 +222,7 @@ enum BackupPassword {
     private static let account = "backup_password"
 
     static var isSet: Bool {
-        get() != nil
+        Self.get() != nil
     }
 
     static func get() -> String? {

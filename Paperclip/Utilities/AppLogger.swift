@@ -1,7 +1,6 @@
 import Foundation
 import os.log
 
-@MainActor
 final class AppLogger: ObservableObject {
     static let shared = AppLogger()
 
@@ -20,16 +19,16 @@ final class AppLogger: ObservableObject {
         info("App", "Paperclip iOS avviato")
     }
 
-    nonisolated func info(_ category: String, _ message: String) {
+    func info(_ category: String, _ message: String) {
         logger.info("[\(category, privacy: .public)] \(message, privacy: .public)")
-        Task { @MainActor in
+        DispatchQueue.main.async {
             self.append(category: category, message: message, isError: false)
         }
     }
 
-    nonisolated func error(_ category: String, _ message: String) {
+    func error(_ category: String, _ message: String) {
         logger.error("[\(category, privacy: .public)] ERRORE: \(message, privacy: .public)")
-        Task { @MainActor in
+        DispatchQueue.main.async {
             self.append(category: category, message: message, isError: true)
         }
     }
