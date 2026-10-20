@@ -28,3 +28,6 @@ Package.resolved
 # Backup / temp
 *.swp
 *~
+
+# Documentazione locale non sincronizzata
+CLAUDE.md
