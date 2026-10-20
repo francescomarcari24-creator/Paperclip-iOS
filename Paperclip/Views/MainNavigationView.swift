@@ -273,15 +273,15 @@ struct MainNavigationView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Toggle("Mostra filtri", isOn: Binding(
-                        get: { preferences.showFeedFilters },
-                        set: { newValue in
-                            withAnimation { preferences.showFeedFilters = newValue }
-                        }
-                    ))
-                    .labelsHidden()
-                    .scaleEffect(0.8)
-                    .accessibilityLabel("Mostra filtri")
+                    ThinSwitch(
+                        isOn: Binding(
+                            get: { preferences.showFeedFilters },
+                            set: { newValue in
+                                withAnimation { preferences.showFeedFilters = newValue }
+                            }
+                        ),
+                        accessibilityLabel: "Mostra filtri"
+                    )
                 }
             }
         }
@@ -581,6 +581,37 @@ struct HighlightsHubSheet: View {
                 }
             }
         }
+    }
+}
+
+/// Slider on/off sottile, come lo ThinSwitch di Android: binario 34x18, cursore 12.
+struct ThinSwitch: View {
+    @Binding var isOn: Bool
+    let accessibilityLabel: String
+    @Environment(\.paperclipPalette) private var palette
+
+    private let trackWidth: CGFloat = 34
+    private let thumbSize: CGFloat = 12
+    private let padding: CGFloat = 3
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(isOn ? palette.primary : palette.surfaceVariant)
+                .frame(width: trackWidth, height: thumbSize + padding * 2)
+            Circle()
+                .fill(isOn ? palette.onPrimary : palette.outline)
+                .frame(width: thumbSize, height: thumbSize)
+                .offset(x: isOn ? trackWidth - thumbSize - padding : padding)
+        }
+        .animation(.easeInOut(duration: 0.25), value: isOn)
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .onTapGesture { isOn.toggle() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(isOn ? "Attivo" : "Disattivo")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
