@@ -224,10 +224,11 @@ enum ZipArchive {
                     capacity *= 2
                     out.count = capacity
                 }
+                let currentCapacity = out.count
                 let status = out.withUnsafeMutableBytes { outPtr -> Int32 in
                     let base = outPtr.bindMemory(to: Bytef.self).baseAddress!
                     stream.next_out = base.advanced(by: Int(stream.total_out))
-                    stream.avail_out = uInt(out.count - Int(stream.total_out))
+                    stream.avail_out = uInt(currentCapacity - Int(stream.total_out))
                     return zlib.inflate(&stream, Z_NO_FLUSH)
                 }
                 if status == Z_STREAM_END {
