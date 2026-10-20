@@ -2,9 +2,8 @@ import SwiftUI
 
 enum MainTab: String, CaseIterable {
     case feed = "Feed"
-    case archive = "Archivio"
     case folders = "Cartelle"
-    case trash = "Cestino"
+    case archive = "Archivio"
     case settings = "Impostazioni"
 }
 
@@ -33,25 +32,19 @@ struct MainNavigationView: View {
                     }
                     .tag(MainTab.feed)
 
-                archiveTab
-                    .tabItem {
-                        Label("Archivio", systemImage: "archivebox.fill")
-                    }
-                    .tag(MainTab.archive)
-
                 FoldersAndTagsView(viewModel: viewModel)
                     .tabItem {
                         Label("Cartelle", systemImage: "folder.fill")
                     }
                     .tag(MainTab.folders)
 
-                TrashView(viewModel: viewModel)
+                archiveTab
                     .tabItem {
-                        Label("Cestino", systemImage: "trash.fill")
+                        Label("Archivio", systemImage: "archivebox.fill")
                     }
-                    .tag(MainTab.trash)
+                    .tag(MainTab.archive)
 
-                SettingsView(viewModel: viewModel)
+                SettingsView(viewModel: viewModel, onOpenHighlights: { showingHighlightsHub = true })
                     .tabItem {
                         Label("Impostazioni", systemImage: "gearshape.fill")
                     }
@@ -265,15 +258,6 @@ struct MainNavigationView: View {
                         }
                         .accessibilityLabel("Sincronizzazione Wi-Fi P2P")
 
-                        if !viewModel.highlightedItems.isEmpty {
-                            Button {
-                                showingHighlightsHub = true
-                            } label: {
-                                Image(systemName: "highlighter")
-                            }
-                            .accessibilityLabel("Evidenziazioni")
-                        }
-
                         if viewModel.allItemsWithDetails.contains(where: { $0.item.isPrivate && $0.item.deletedAt == nil }) {
                             Button {
                                 if viewModel.privateUnlocked {
@@ -289,31 +273,25 @@ struct MainNavigationView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        Button {
-                            withAnimation {
-                                preferences.showFeedFilters.toggle()
-                            }
-                        } label: {
-                            Image(systemName: preferences.showFeedFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    Button {
+                        withAnimation {
+                            preferences.showFeedFilters.toggle()
                         }
-
-                        Menu {
-                            Picker("Ordina per", selection: $preferences.sortOrder) {
-                                ForEach(SortOrder.allCases) { order in
-                                    Text(order.label).tag(order)
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "arrow.up.arrow.down.circle")
-                        }
+                    } label: {
+                        Image(systemName: preferences.showFeedFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                     }
+                    .accessibilityLabel("Mostra filtri")
                 }
             }
         }
     }
 
     // MARK: - Filter Bar
+
+    /// Stesso ordine dei filtri per tipo di Android.
+    private static let typeFilterOrder: [ItemType] = [
+        .LINK, .PHOTO, .VIDEO, .AUDIO, .PDF, .CHECKLIST, .DRAWING, .NOTE
+    ]
 
     private var filterBarSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -345,9 +323,9 @@ struct MainNavigationView: View {
                         viewModel.unreadOnly.toggle()
                     }
 
-                    ForEach(ItemType.allCases) { type in
+                    ForEach(Self.typeFilterOrder) { type in
                         FilterChip(
-                            title: type.pluralLabel,
+                            title: type == .PHOTO ? "Immagini" : type.pluralLabel,
                             icon: type.systemIcon,
                             isSelected: viewModel.selectedType == type
                         ) {
@@ -357,40 +335,72 @@ struct MainNavigationView: View {
                 }
             }
 
-            if !viewModel.folders.isEmpty || !viewModel.tags.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        if !viewModel.folders.isEmpty {
-                            Menu {
-                                Button("Tutte le cartelle") {
-                                    viewModel.selectedFolderId = nil
-                                }
-                                Divider()
-                                ForEach(viewModel.folderTree.entries) { entry in
-                                    let prefix = String(repeating: "  ", count: entry.depth)
-                                    Button("\(prefix)📁 \(entry.folder.name)") {
-                                        viewModel.selectedFolderId = entry.folder.id
-                                    }
-                                }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Menu {
+                        Button {
+                            viewModel.selectedFolderId = nil
+                        } label: {
+                            Label("Tutte le cartelle", systemImage: viewModel.selectedFolderId == nil ? "checkmark" : "folder")
+                        }
+                        if viewModel.folders.isEmpty {
+                            Text("Nessuna cartella creata")
+                        }
+                        ForEach(viewModel.folderTree.entries) { entry in
+                            let prefix = String(repeating: "  ", count: entry.depth)
+                            Button {
+                                viewModel.selectedFolderId = entry.folder.id
                             } label: {
-                                let label = viewModel.selectedFolderId.flatMap { viewModel.folderTree.pathLabel($0) } ?? "Cartella"
-                                FilterChipLabel(
-                                    title: label,
-                                    icon: "folder.fill",
-                                    isSelected: viewModel.selectedFolderId != nil
-                                )
+                                Label("\(prefix)\(entry.folder.name)", systemImage: viewModel.selectedFolderId == entry.folder.id ? "checkmark" : "folder")
                             }
                         }
+                    } label: {
+                        let label = viewModel.selectedFolderId.flatMap { viewModel.folderTree.pathLabel($0) } ?? "Cartella"
+                        FilterChipLabel(
+                            title: label,
+                            icon: "folder.fill",
+                            isSelected: viewModel.selectedFolderId != nil
+                        )
+                    }
 
+                    Menu {
+                        Button {
+                            viewModel.selectedTagIds = []
+                        } label: {
+                            Label("Tutte le etichette", systemImage: viewModel.selectedTagIds.isEmpty ? "checkmark" : "tag")
+                        }
+                        if viewModel.tags.isEmpty {
+                            Text("Nessuna etichetta creata")
+                        }
                         ForEach(viewModel.tags) { tag in
-                            FilterChip(
-                                title: "#\(tag.name)",
-                                icon: nil,
-                                isSelected: viewModel.selectedTagIds.contains(tag.id)
-                            ) {
+                            Button {
                                 viewModel.toggleTagFilter(tag.id)
+                            } label: {
+                                Label(tag.name, systemImage: viewModel.selectedTagIds.contains(tag.id) ? "checkmark" : "tag")
                             }
                         }
+                    } label: {
+                        let selected = viewModel.tags.filter { viewModel.selectedTagIds.contains($0.id) }
+                        let label = selected.isEmpty ? "Etichette" : (selected.count == 1 ? selected[0].name : "\(selected.count) etichette")
+                        FilterChipLabel(
+                            title: label,
+                            icon: "tag.fill",
+                            isSelected: !selected.isEmpty
+                        )
+                    }
+
+                    Menu {
+                        Picker("Ordina per", selection: $preferences.sortOrder) {
+                            ForEach(SortOrder.allCases) { order in
+                                Text(order.label).tag(order)
+                            }
+                        }
+                    } label: {
+                        FilterChipLabel(
+                            title: "Ordina",
+                            icon: "arrow.up.arrow.down",
+                            isSelected: preferences.sortOrder != .NEWEST
+                        )
                     }
                 }
             }

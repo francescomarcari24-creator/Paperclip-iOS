@@ -21,6 +21,7 @@ struct BackupFileDocument: FileDocument {
 
 struct SettingsView: View {
     @ObservedObject var viewModel: MainViewModel
+    var onOpenHighlights: () -> Void = {}
     @ObservedObject private var preferences = UiPreferences.shared
     @ObservedObject private var logger = AppLogger.shared
     @ObservedObject private var appLock = AppLockManager.shared
@@ -40,6 +41,7 @@ struct SettingsView: View {
 
     // P2P & External Import/Export
     @State private var showingP2PSync: Bool = false
+    @State private var showingTrash: Bool = false
     @State private var showingExternalImporter: Bool = false
     @State private var exportedShareUrl: URL? = nil
     @State private var exportedShareLabel: String = ""
@@ -80,21 +82,8 @@ struct SettingsView: View {
                     }
                 }
 
-                // Sincronizzazione locale Wi-Fi P2P
-                Section {
-                    Button {
-                        showingP2PSync = true
-                    } label: {
-                        Label("Sincronizzazione Wi-Fi P2P (Android / iOS)", systemImage: "antenna.radiowaves.left.and.right")
-                    }
-                } header: {
-                    Text("Rete Locale e Dispositivi Fidati")
-                } footer: {
-                    Text("Sincronizza l'archivio e le cartelle condivise direttamente via Wi-Fi con Android o altri iPhone senza passare dal cloud.")
-                }
-
-                // Aspetto e Tema
-                Section("Aspetto e Tema") {
+                // Aspetto
+                Section("Aspetto") {
                     Picker("Modalità tema", selection: $preferences.themeMode) {
                         ForEach(ThemeMode.allCases) { mode in
                             Text(mode.label).tag(mode)
@@ -117,147 +106,8 @@ struct SettingsView: View {
                     }
                 }
 
-                // Backup e Compatibilità Android (.zip / PCLIPENC)
-                Section {
-                    Toggle("Proteggi i backup con password (PCLIPENC)", isOn: Binding(
-                        get: { hasBackupPassword },
-                        set: { enabled in
-                            if enabled {
-                                newBackupPassword = ""
-                                showingConfigurePasswordSheet = true
-                            } else {
-                                BackupPassword.set(nil)
-                                hasBackupPassword = false
-                                statusBannerMessage = "Password di backup rimossa."
-                            }
-                        }
-                    ))
-
-                    Button {
-                        exportBackupNow()
-                    } label: {
-                        Label("Esporta backup (.zip / PCLIPENC)", systemImage: "square.and.arrow.up")
-                    }
-
-                    Button {
-                        showingBackupImporter = true
-                    } label: {
-                        Label("Ripristina backup da Android o iOS", systemImage: "square.and.arrow.down")
-                    }
-                } header: {
-                    Text("Backup Completo")
-                } footer: {
-                    Text("I backup creati su Android (anche cifrati con PCLIPENC) sono compatibili al 100% con iOS e viceversa.")
-                }
-
-                // Esportazione (Markdown/Obsidian, Netscape HTML, Readwise CSV) & Importazione Esterna (Keep, Pocket, Browser)
-                Section {
-                    Button {
-                        do {
-                            let res = try ArchiveExporter.writeMarkdownZip()
-                            exportedShareUrl = res.fileUrl
-                            exportedShareLabel = "Markdown/Obsidian (\(res.count) note)"
-                            statusBannerMessage = "Archivio Markdown generato (\(res.count) elementi). Tocca 'Condividi / Salva' in alto."
-                        } catch {
-                            statusBannerMessage = "Errore esportazione Markdown: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Esporta Markdown / Obsidian (.zip)", systemImage: "doc.zipper")
-                    }
-
-                    Button {
-                        do {
-                            let res = try ArchiveExporter.writeBookmarksHtml()
-                            exportedShareUrl = res.fileUrl
-                            exportedShareLabel = "Segnalibri (\(res.count) link)"
-                            statusBannerMessage = "File Segnalibri HTML generato (\(res.count) link). Tocca 'Condividi / Salva' in alto."
-                        } catch {
-                            statusBannerMessage = "Errore esportazione Segnalibri: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Esporta Segnalibri Browser (.html)", systemImage: "bookmark.fill")
-                    }
-
-                    Button {
-                        do {
-                            let res = try ArchiveExporter.writeReadwiseCsv()
-                            exportedShareUrl = res.fileUrl
-                            exportedShareLabel = "Evidenziazioni CSV (\(res.count))"
-                            statusBannerMessage = "File Readwise CSV generato (\(res.count) evidenziazioni). Tocca 'Condividi / Salva' in alto."
-                        } catch {
-                            statusBannerMessage = "Errore esportazione CSV: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Esporta Evidenziazioni Readwise (.csv)", systemImage: "highlighter")
-                    }
-
-                    Button {
-                        showingExternalImporter = true
-                    } label: {
-                        Label("Importa da Google Keep / Pocket / Browser…", systemImage: "tray.and.arrow.down.fill")
-                    }
-                } header: {
-                    Text("Esportazione e Importazione da Altri Servizi")
-                } footer: {
-                    Text("Supporta Google Keep Takeout (.zip/.json), Pocket (.csv) e Segnalibri di Chrome/Safari/Firefox (.html).")
-                }
-
-                // Automazioni: Regole Automatiche, Feed RSS, Controllo Link Interrotti
-                Section("Automazioni e Feed RSS") {
-                    NavigationLink {
-                        AutoRulesManagementView(viewModel: viewModel)
-                    } label: {
-                        Label("Regole Automatiche (\(AutoRules.list().count))", systemImage: "wand.and.stars")
-                    }
-
-                    NavigationLink {
-                        RssFeedsManagementView(viewModel: viewModel)
-                    } label: {
-                        Label("Feed RSS e Atom (\(RssFeeds.list().count))", systemImage: "dot.radiowaves.up.forward")
-                    }
-
-                    Button {
-                        guard !isCheckingLinks else { return }
-                        isCheckingLinks = true
-                        linkCheckProgress = "Avvio controllo…"
-                        Task {
-                            let (summary, _) = await LinkChecker.checkAllLinks { done, total in
-                                Task { @MainActor in
-                                    linkCheckProgress = "\(done)/\(total)"
-                                }
-                            }
-                            await MainActor.run {
-                                isCheckingLinks = false
-                                viewModel.reloadAll()
-                                statusBannerMessage = "Controllati \(summary.checked) link: \(summary.broken) interrotti, \(summary.unreachable) non raggiungibili."
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Label("Verifica Link Interrotti (404 / Offline)", systemImage: "link.badge.plus")
-                            Spacer()
-                            if isCheckingLinks {
-                                Text(linkCheckProgress)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isCheckingLinks)
-                }
-
-                // Riscopri
-                Section("Riscopri nel Feed") {
-                    Toggle("Mostra 'Riscopri' in cima al feed", isOn: $preferences.resurfaceEnabled)
-                    if preferences.resurfaceEnabled {
-                        Stepper("Elementi al giorno: \(preferences.resurfaceCount)", value: $preferences.resurfaceCount, in: 1...6)
-                        Stepper("Età minima: \(preferences.resurfaceMinDays) giorni", value: $preferences.resurfaceMinDays, in: 7...365, step: 7)
-                    }
-                }
-
-                // Sicurezza / PIN / Face ID
-                Section("Sicurezza e Blocco App") {
+                // Sicurezza & Protezione
+                Section("Sicurezza & Protezione") {
                     HStack {
                         Label(
                             viewModel.privateUnlocked ? "Elementi privati sbloccati" : "Elementi privati bloccati",
@@ -306,6 +156,163 @@ struct SettingsView: View {
                     }
                 }
 
+                // Contenuti
+                Section("Contenuti") {
+                    NavigationLink {
+                        RssFeedsManagementView(viewModel: viewModel)
+                    } label: {
+                        Label("Feed RSS e Atom (\(RssFeeds.list().count))", systemImage: "dot.radiowaves.up.forward")
+                    }
+
+                    Toggle("Mostra 'Riscopri' in cima al feed", isOn: $preferences.resurfaceEnabled)
+                    if preferences.resurfaceEnabled {
+                        Stepper("Elementi al giorno: \(preferences.resurfaceCount)", value: $preferences.resurfaceCount, in: 1...6)
+                        Stepper("Età minima: \(preferences.resurfaceMinDays) giorni", value: $preferences.resurfaceMinDays, in: 7...365, step: 7)
+                    }
+
+                    Button {
+                        onOpenHighlights()
+                    } label: {
+                        Label("Evidenziazioni", systemImage: "highlighter")
+                    }
+
+                    Button {
+                        showingTrash = true
+                    } label: {
+                        Label("Cestino", systemImage: "trash")
+                    }
+                }
+
+                // Automazioni
+                Section("Automazioni") {
+                    NavigationLink {
+                        AutoRulesManagementView(viewModel: viewModel)
+                    } label: {
+                        Label("Regole Automatiche (\(AutoRules.list().count))", systemImage: "wand.and.stars")
+                    }
+
+                    Button {
+                        guard !isCheckingLinks else { return }
+                        isCheckingLinks = true
+                        linkCheckProgress = "Avvio controllo…"
+                        Task {
+                            let (summary, _) = await LinkChecker.checkAllLinks { done, total in
+                                Task { @MainActor in
+                                    linkCheckProgress = "\(done)/\(total)"
+                                }
+                            }
+                            await MainActor.run {
+                                isCheckingLinks = false
+                                viewModel.reloadAll()
+                                statusBannerMessage = "Controllati \(summary.checked) link: \(summary.broken) interrotti, \(summary.unreachable) non raggiungibili."
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Label("Verifica Link Interrotti (404 / Offline)", systemImage: "link.badge.plus")
+                            Spacer()
+                            if isCheckingLinks {
+                                Text(linkCheckProgress)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isCheckingLinks)
+                }
+
+                // Sincronizzazione Wi-Fi P2P
+                Section {
+                    Button {
+                        showingP2PSync = true
+                    } label: {
+                        Label("Sincronizzazione Wi-Fi P2P (Android / iOS)", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                } header: {
+                    Text("Sincronizzazione Wi-Fi P2P")
+                } footer: {
+                    Text("Sincronizza l'archivio e le cartelle condivise direttamente via Wi-Fi con Android o altri iPhone senza passare dal cloud.")
+                }
+
+                // Backup e Ripristino Dati
+                Section {
+                    Button {
+                        exportBackupNow()
+                    } label: {
+                        Label("Esporta backup (.zip / PCLIPENC)", systemImage: "square.and.arrow.up")
+                    }
+
+                    Button {
+                        showingBackupImporter = true
+                    } label: {
+                        Label("Ripristina backup da Android o iOS", systemImage: "square.and.arrow.down")
+                    }
+
+                    Toggle("Proteggi i backup con password (PCLIPENC)", isOn: Binding(
+                        get: { hasBackupPassword },
+                        set: { enabled in
+                            if enabled {
+                                newBackupPassword = ""
+                                showingConfigurePasswordSheet = true
+                            } else {
+                                BackupPassword.set(nil)
+                                hasBackupPassword = false
+                                statusBannerMessage = "Password di backup rimossa."
+                            }
+                        }
+                    ))
+
+                    Button {
+                        showingExternalImporter = true
+                    } label: {
+                        Label("Importa da Google Keep / Pocket / Browser…", systemImage: "tray.and.arrow.down.fill")
+                    }
+
+                    Button {
+                        do {
+                            let res = try ArchiveExporter.writeMarkdownZip()
+                            exportedShareUrl = res.fileUrl
+                            exportedShareLabel = "Markdown/Obsidian (\(res.count) note)"
+                            statusBannerMessage = "Archivio Markdown generato (\(res.count) elementi). Tocca 'Condividi / Salva' in alto."
+                        } catch {
+                            statusBannerMessage = "Errore esportazione Markdown: \(error.localizedDescription)"
+                        }
+                    } label: {
+                        Label("Esporta Markdown / Obsidian (.zip)", systemImage: "doc.zipper")
+                    }
+
+                    Button {
+                        do {
+                            let res = try ArchiveExporter.writeBookmarksHtml()
+                            exportedShareUrl = res.fileUrl
+                            exportedShareLabel = "Segnalibri (\(res.count) link)"
+                            statusBannerMessage = "File Segnalibri HTML generato (\(res.count) link). Tocca 'Condividi / Salva' in alto."
+                        } catch {
+                            statusBannerMessage = "Errore esportazione Segnalibri: \(error.localizedDescription)"
+                        }
+                    } label: {
+                        Label("Esporta Segnalibri Browser (.html)", systemImage: "bookmark.fill")
+                    }
+
+                    Button {
+                        do {
+                            let res = try ArchiveExporter.writeReadwiseCsv()
+                            exportedShareUrl = res.fileUrl
+                            exportedShareLabel = "Evidenziazioni CSV (\(res.count))"
+                            statusBannerMessage = "File Readwise CSV generato (\(res.count) evidenziazioni). Tocca 'Condividi / Salva' in alto."
+                        } catch {
+                            statusBannerMessage = "Errore esportazione CSV: \(error.localizedDescription)"
+                        }
+                    } label: {
+                        Label("Esporta Evidenziazioni Readwise (.csv)", systemImage: "highlighter")
+                    }
+                } header: {
+                    Text("Backup e Ripristino Dati")
+                } footer: {
+                    Text("I backup creati su Android (anche cifrati con PCLIPENC) sono compatibili con iOS e viceversa. Supporta Google Keep Takeout (.zip/.json), Pocket (.csv) e Segnalibri di Chrome/Safari/Firefox (.html).")
+                }
+
                 // Console di Debug e Diagnostica in-app
                 Section {
                     NavigationLink {
@@ -329,6 +336,9 @@ struct SettingsView: View {
             .sheet(isPresented: $showingP2PSync) {
                 P2PSyncView()
                     .environmentObject(viewModel)
+            }
+            .sheet(isPresented: $showingTrash) {
+                TrashView(viewModel: viewModel)
             }
             .sheet(isPresented: $showingSetPinSheet) {
                 NavigationStack {
