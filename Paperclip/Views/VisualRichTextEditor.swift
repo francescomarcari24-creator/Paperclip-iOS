@@ -31,6 +31,14 @@ final class RichTextFormattingController: ObservableObject {
     static let bulletPrefix = "• "
     static let quotePrefix = "▏ "
 
+    static var wordWrapParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        style.hyphenationFactor = 0.0
+        style.lineBreakStrategy = []
+        return style
+    }
+
     // MARK: - Toolbar Actions
 
     private func ensureFocused(_ tv: UITextView) {
@@ -266,6 +274,7 @@ final class RichTextFormattingController: ObservableObject {
         let size = isHeading ? Self.headingFontSize : Self.baseFontSize
         attrs[.font] = Self.makeFont(bold: isBold || isHeading, italic: isItalic, size: size, mono: isInlineCode)
         attrs[.foregroundColor] = UIColor.label
+        attrs[.paragraphStyle] = Self.wordWrapParagraphStyle
         if isStrikethrough {
             attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         } else {
@@ -289,7 +298,8 @@ final class RichTextFormattingController: ObservableObject {
     private func defaultAttributes() -> [NSAttributedString.Key: Any] {
         [
             .font: Self.makeFont(bold: false, italic: false, size: Self.baseFontSize, mono: false),
-            .foregroundColor: UIColor.label
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: Self.wordWrapParagraphStyle
         ]
     }
 
@@ -343,7 +353,8 @@ final class RichTextFormattingController: ObservableObject {
                     string: "\n",
                     attributes: [
                         .font: makeFont(bold: false, italic: false, size: baseFontSize, mono: false),
-                        .foregroundColor: UIColor.label
+                        .foregroundColor: UIColor.label,
+                        .paragraphStyle: wordWrapParagraphStyle
                     ]
                 )
                 result.append(newlineAttr)
@@ -367,7 +378,8 @@ final class RichTextFormattingController: ObservableObject {
             let size = isHeading ? headingFontSize : baseFontSize
             var attrs: [NSAttributedString.Key: Any] = [
                 .font: makeFont(bold: bold || isHeading, italic: italic, size: size, mono: code),
-                .foregroundColor: UIColor.label
+                .foregroundColor: UIColor.label,
+                .paragraphStyle: wordWrapParagraphStyle
             ]
             if strike {
                 attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
@@ -640,10 +652,16 @@ struct VisualRichTextEditor: UIViewRepresentable {
         tv.backgroundColor = .clear
         tv.isScrollEnabled = true
         tv.alwaysBounceVertical = false
+        tv.textContainer.lineBreakMode = .byWordWrapping
         tv.textContainerInset = UIEdgeInsets(top: 10, left: 4, bottom: 10, right: 4)
         tv.font = RichTextFormattingController.makeFont(bold: false, italic: false, size: RichTextFormattingController.baseFontSize, mono: false)
         tv.textColor = .label
         tv.attributedText = RichTextFormattingController.parseMarkdownToAttributed(markdownText)
+        tv.typingAttributes = [
+            .font: RichTextFormattingController.makeFont(bold: false, italic: false, size: RichTextFormattingController.baseFontSize, mono: false),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: RichTextFormattingController.wordWrapParagraphStyle
+        ]
         controller.textView = tv
         controller.onMarkdownChanged = { newMd in
             context.coordinator.updateBinding(newMd)

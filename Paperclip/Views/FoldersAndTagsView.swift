@@ -52,6 +52,16 @@ struct FoldersAndTagsView: View {
                 tagsSection
             }
             .navigationTitle("Cartelle e Tag")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        importTargetFolderId = nil
+                        showingPackageImporter = true
+                    } label: {
+                        Label("Importa .paperclip", systemImage: "shippingbox")
+                    }
+                }
+            }
             .sheet(isPresented: $showingFolderDialog) {
                 folderEditorSheet
             }
@@ -88,23 +98,17 @@ struct FoldersAndTagsView: View {
             }
         } header: {
             HStack {
-                Text("Cartelle e Sottocartelle")
+                Text("Cartelle")
+                    .lineLimit(1)
                 Spacer()
-                Button {
-                    importTargetFolderId = nil
-                    showingPackageImporter = true
-                } label: {
-                    Label("Importa .paperclip", systemImage: "shippingbox")
-                        .font(.caption.bold())
-                }
-                .padding(.trailing, 8)
-
                 Button {
                     beginNewFolder()
                 } label: {
                     Label("Nuova", systemImage: "folder.badge.plus")
                         .font(.caption.bold())
+                        .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
         } footer: {
             Text("Tieni premuto su una cartella per condividerla come pacchetto .paperclip o pagina .html. Eliminando una cartella, le sue sottocartelle e i suoi elementi salgono al livello superiore.")

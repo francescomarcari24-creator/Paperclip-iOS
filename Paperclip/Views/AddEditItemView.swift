@@ -156,6 +156,7 @@ struct AddEditItemView: View {
                                     }
                                     newTagName = ""
                                 }
+                                .fixedSize(horizontal: true, vertical: false)
                                 .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
                         }
@@ -270,6 +271,7 @@ struct AddEditItemView: View {
                     showingFileImporter = true
                 }
                 .buttonStyle(.bordered)
+                .fixedSize(horizontal: true, vertical: false)
             }
 
             if itemType == .PHOTO {

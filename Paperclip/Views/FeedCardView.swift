@@ -116,6 +116,8 @@ struct FeedCardView: View {
                     if item.isUnread {
                         Text("Da leggere")
                             .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(palette.primaryContainer)
@@ -126,6 +128,8 @@ struct FeedCardView: View {
                     if let broken = viewModel.brokenLinksMap[item.id] {
                         Label(broken.status == .BROKEN ? "Link rotto" : "Offline", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption2.weight(.bold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
                             .background(Color.red.opacity(0.18))
@@ -190,6 +194,7 @@ struct FeedCardView: View {
                                 .frame(width: 8, height: 8)
                             Text(viewModel.folderTree.pathLabel(folder.id))
                                 .font(.caption2.weight(.medium))
+                                .lineLimit(1)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -197,9 +202,10 @@ struct FeedCardView: View {
                         .clipShape(Capsule())
                     }
 
-                    ForEach(entry.tags.prefix(3)) { tag in
+                    ForEach(entry.tags.prefix(2)) { tag in
                         Text("#\(tag.name)")
                             .font(.caption2.weight(.medium))
+                            .lineLimit(1)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(Color(hexString: tag.colorHex).opacity(0.2))
@@ -213,7 +219,9 @@ struct FeedCardView: View {
                                 .font(.caption2)
                             Text(String(format: "%02d:%02d", mins / 60, mins % 60))
                                 .font(.caption2)
+                                .lineLimit(1)
                         }
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(palette.primary)
                     }
 
@@ -221,6 +229,8 @@ struct FeedCardView: View {
 
                     Text(Self.formatDate(item.createdAt))
                         .font(.caption2)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(palette.onSurfaceVariant)
                 }
             }

@@ -114,6 +114,8 @@ struct ItemDetailView: View {
             HStack(spacing: 8) {
                 Label(item.itemType.label, systemImage: item.itemType.systemIcon)
                     .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(palette.primaryContainer)
@@ -123,6 +125,7 @@ struct ItemDetailView: View {
                 if let folder = entry.folder {
                     Label(viewModel.folderTree.pathLabel(folder.id), systemImage: "folder.fill")
                         .font(.caption)
+                        .lineLimit(1)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(palette.surfaceContainer)
@@ -257,11 +260,13 @@ struct ItemDetailView: View {
                     .buttonStyle(.plain)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Registrazione vocale / Audio")
+                        Text("Nota vocale")
                             .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
                         let total = max(audioPlayer.durationMs, item.audioDurationMs ?? 0)
                         Text("\(formatMs(audioPlayer.currentTimeMs)) / \(formatMs(total))")
                             .font(.caption.monospacedDigit())
+                            .lineLimit(1)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -278,8 +283,10 @@ struct ItemDetailView: View {
                     } label: {
                         Label(isIndexing ? "Trascrizione…" : "Trascrivi", systemImage: "waveform.and.mic")
                             .font(.caption.weight(.semibold))
+                            .lineLimit(1)
                     }
                     .buttonStyle(.bordered)
+                    .fixedSize(horizontal: true, vertical: false)
                     .disabled(isIndexing)
                 }
             }
@@ -418,6 +425,7 @@ struct ItemDetailView: View {
                 HStack {
                     Label("Testo estratto / Copia offline", systemImage: "doc.text.magnifyingglass")
                         .font(.caption.bold())
+                        .lineLimit(1)
                         .foregroundColor(palette.primary)
                     Spacer()
                     Button {
@@ -425,8 +433,10 @@ struct ItemDetailView: View {
                     } label: {
                         Label("Ascolta", systemImage: "speaker.wave.2.fill")
                             .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
                     }
                     .buttonStyle(.bordered)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 Text(extracted)
                     .font(.footnote)

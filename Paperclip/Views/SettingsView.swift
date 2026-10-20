@@ -97,7 +97,7 @@ struct SettingsView: View {
                 Section("Aspetto e Tema") {
                     Picker("Modalità tema", selection: $preferences.themeMode) {
                         ForEach(ThemeMode.allCases) { mode in
-                            Label(mode.label, systemImage: mode.systemIcon).tag(mode)
+                            Text(mode.label).tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -271,6 +271,7 @@ struct SettingsView: View {
                                 viewModel.unlockPrivateItems()
                             }
                         }
+                        .fixedSize(horizontal: true, vertical: false)
                     }
 
                     if appLock.hasPin {

@@ -71,6 +71,7 @@ struct MainNavigationView: View {
                     }
                     .font(.subheadline.bold())
                     .foregroundColor(palette.primaryContainer)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -600,7 +601,9 @@ struct FilterChipLabel: View {
             }
             Text(title)
                 .font(.caption.weight(.medium))
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(isSelected ? palette.primaryContainer : palette.surfaceContainer)
