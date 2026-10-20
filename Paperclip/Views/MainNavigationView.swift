@@ -584,34 +584,49 @@ struct HighlightsHubSheet: View {
     }
 }
 
-/// Slider on/off sottile, come lo ThinSwitch di Android: binario 34x18, cursore 12.
+/// Selettore a due posizioni (Off / On) in stile barra inferiore: capsula con cursore che scorre.
 struct ThinSwitch: View {
     @Binding var isOn: Bool
     let accessibilityLabel: String
     @Environment(\.paperclipPalette) private var palette
 
-    private let trackWidth: CGFloat = 34
-    private let thumbSize: CGFloat = 12
-    private let padding: CGFloat = 3
+    private let segmentWidth: CGFloat = 54
+    private let height: CGFloat = 34
+    private let inset: CGFloat = 3
 
     var body: some View {
         ZStack(alignment: .leading) {
             Capsule()
-                .fill(isOn ? palette.primary : palette.surfaceVariant)
-                .frame(width: trackWidth, height: thumbSize + padding * 2)
-            Circle()
-                .fill(isOn ? palette.onPrimary : palette.outline)
-                .frame(width: thumbSize, height: thumbSize)
-                .offset(x: isOn ? trackWidth - thumbSize - padding : padding)
+                .fill(palette.surfaceVariant)
+
+            Capsule()
+                .fill(palette.primary)
+                .frame(width: segmentWidth - inset * 2, height: height - inset * 2)
+                .offset(x: isOn ? segmentWidth + inset : inset)
+
+            HStack(spacing: 0) {
+                segment("Off", selected: !isOn, value: false)
+                segment("On", selected: isOn, value: true)
+            }
         }
+        .frame(width: segmentWidth * 2, height: height)
         .animation(.easeInOut(duration: 0.25), value: isOn)
-        .frame(minWidth: 44, minHeight: 44)
-        .contentShape(Rectangle())
-        .onTapGesture { isOn.toggle() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(isOn ? "Attivo" : "Disattivo")
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { isOn.toggle() }
+    }
+
+    private func segment(_ title: String, selected: Bool, value: Bool) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(selected ? palette.onPrimary : palette.onSurfaceVariant)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(width: segmentWidth, height: height)
+            .contentShape(Rectangle())
+            .onTapGesture { isOn = value }
     }
 }
 
