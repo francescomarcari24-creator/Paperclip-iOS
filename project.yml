@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.project
   deploymentTarget:
     iOS: "16.0"
-  xcodeVersion: "16.0"
+  xcodeVersion: "26.0"
   generateEmptyDirectories: true
   createIntermediateGroups: true
 
