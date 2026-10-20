@@ -558,13 +558,6 @@ struct RichTextFormattingBar: View {
                         .padding(.horizontal, 2)
 
                     formatButton(
-                        icon: "textformat.size.larger",
-                        label: "Titolo",
-                        isActive: controller.isHeading,
-                        action: { controller.toggleHeading() }
-                    )
-
-                    formatButton(
                         icon: "list.bullet",
                         label: "Elenco puntato",
                         isActive: controller.isBulletList,
