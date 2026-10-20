@@ -584,49 +584,83 @@ struct HighlightsHubSheet: View {
     }
 }
 
-/// Selettore a due posizioni (Off / On) in stile barra inferiore: capsula con cursore che scorre.
+/// Selettore a due posizioni (Filtri / Nascondi) in stile barra inferiore: il cursore segue il dito,
+/// si può trascinare o toccare, e al rilascio scatta sulla posizione più vicina.
 struct ThinSwitch: View {
     @Binding var isOn: Bool
     let accessibilityLabel: String
     @Environment(\.paperclipPalette) private var palette
+    @State private var dragX: CGFloat? = nil
 
-    private let segmentWidth: CGFloat = 54
-    private let height: CGFloat = 34
+    private let segmentWidth: CGFloat = 80
+    private let height: CGFloat = 36
     private let inset: CGFloat = 3
+
+    private var thumbWidth: CGFloat { segmentWidth - inset * 2 }
+    private var restingX: CGFloat { isOn ? inset : segmentWidth + inset }
+    private var thumbX: CGFloat { dragX ?? restingX }
+    /// Il cursore è sopra "Filtri" se il suo centro sta nella metà sinistra.
+    private var thumbOnLeft: Bool { thumbX + thumbWidth / 2 < segmentWidth }
 
     var body: some View {
         ZStack(alignment: .leading) {
             Capsule()
-                .fill(palette.surfaceVariant)
-
-            Capsule()
-                .fill(palette.primary)
-                .frame(width: segmentWidth - inset * 2, height: height - inset * 2)
-                .offset(x: isOn ? segmentWidth + inset : inset)
+                .fill(palette.primary.opacity(0.22))
+                .overlay(Capsule().strokeBorder(palette.primary.opacity(0.35), lineWidth: 1))
+                .frame(width: thumbWidth, height: height - inset * 2)
+                .offset(x: thumbX)
 
             HStack(spacing: 0) {
-                segment("Off", selected: !isOn, value: false)
-                segment("On", selected: isOn, value: true)
+                label("Filtri", highlighted: thumbOnLeft)
+                label("Nascondi", highlighted: !thumbOnLeft)
             }
         }
         .frame(width: segmentWidth * 2, height: height)
-        .animation(.easeInOut(duration: 0.25), value: isOn)
+        .background(Capsule().fill(palette.surfaceVariant.opacity(0.6)))
+        .modifier(GlassCapsule())
+        .contentShape(Capsule())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    let x = value.location.x - thumbWidth / 2
+                    dragX = min(max(x, inset), segmentWidth + inset)
+                }
+                .onEnded { _ in
+                    let onLeft = thumbOnLeft
+                    if onLeft != isOn {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isOn = onLeft
+                        dragX = nil
+                    }
+                }
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(isOn ? "Attivo" : "Disattivo")
+        .accessibilityValue(isOn ? "Filtri visibili" : "Filtri nascosti")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { isOn.toggle() }
     }
 
-    private func segment(_ title: String, selected: Bool, value: Bool) -> some View {
+    private func label(_ title: String, highlighted: Bool) -> some View {
         Text(title)
-            .font(.subheadline.weight(.semibold))
-            .foregroundColor(selected ? palette.onPrimary : palette.onSurfaceVariant)
+            .font(.subheadline.weight(highlighted ? .semibold : .regular))
+            .foregroundColor(highlighted ? palette.primary : palette.onSurfaceVariant)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .frame(width: segmentWidth, height: height)
-            .contentShape(Rectangle())
-            .onTapGesture { isOn = value }
+    }
+}
+
+/// Su iOS 26 il selettore prende il materiale Liquid Glass; prima resta il fondo pieno.
+private struct GlassCapsule: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            content
+        }
     }
 }
 
