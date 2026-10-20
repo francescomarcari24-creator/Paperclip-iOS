@@ -122,6 +122,16 @@ struct FeedCardView: View {
                             .foregroundColor(palette.onPrimaryContainer)
                             .clipShape(Capsule())
                     }
+
+                    if let broken = viewModel.brokenLinksMap[item.id] {
+                        Label(broken.status == .BROKEN ? "Link rotto" : "Offline", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.red.opacity(0.18))
+                            .foregroundColor(.red)
+                            .clipShape(Capsule())
+                    }
                 }
 
                 // Body preview

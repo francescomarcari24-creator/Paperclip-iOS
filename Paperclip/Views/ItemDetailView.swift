@@ -10,12 +10,22 @@ struct ItemDetailView: View {
     let entry: ArchiveItemWithDetails
     let onEdit: () -> Void
 
+    @StateObject private var audioPlayer = AudioPlayerManager()
+    @StateObject private var readAloud = ReadAloudManager()
+    @State private var showingReaderMode: Bool = false
+    @State private var showingDrawingCanvas: Bool = false
+    @State private var isIndexing: Bool = false
+    @State private var sharePackageUrl: URL? = nil
+    @State private var shareHtmlUrl: URL? = nil
+
     private var item: ArchiveItem { entry.item }
     private var isLockedPrivate: Bool { item.isPrivate && !viewModel.privateUnlocked }
+    private var itemContent: ItemContent? { viewModel.itemContentsById[item.id] }
+    private var extractedArticle: ExtractedArticle? { ExtractedArticle.fromJson(itemContent?.articleJson) }
 
     var body: some View {
         NavigationStack {
-            ZStack {
+            ZStack(alignment: .bottom) {
                 palette.background.ignoresSafeArea()
 
                 if isLockedPrivate {
@@ -81,6 +91,32 @@ struct ItemDetailView: View {
 
                             Divider()
 
+                            // Broken link warning banner
+                            if let broken = viewModel.brokenLinksMap[item.id],
+                               let rawUrl = item.contentUrl {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Label(
+                                        broken.status == .BROKEN ? "Link non funzionante (HTTP \(broken.code))" : "Dominio non raggiungibile",
+                                        systemImage: "exclamationmark.triangle.fill"
+                                    )
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.red)
+
+                                    Button {
+                                        if let wb = URL(string: LinkChecker.waybackUrl(for: rawUrl)) {
+                                            openURL(wb)
+                                        }
+                                    } label: {
+                                        Label("Cerca su Wayback Machine (Internet Archive)", systemImage: "clock.arrow.circlepath")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                            }
+
                             // Link section
                             if item.itemType == .LINK, let rawUrl = item.contentUrl, !rawUrl.isEmpty {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -89,24 +125,48 @@ struct ItemDetailView: View {
                                         .foregroundColor(palette.primary)
                                         .textSelection(.enabled)
 
-                                    HStack(spacing: 12) {
-                                        Button {
-                                            let withScheme = rawUrl.contains("://") ? rawUrl : "https://\(rawUrl)"
-                                            if let url = URL(string: withScheme) {
-                                                viewModel.markOpened(item)
-                                                openURL(url)
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 10) {
+                                            Button {
+                                                let withScheme = rawUrl.contains("://") ? rawUrl : "https://\(rawUrl)"
+                                                if let url = URL(string: withScheme) {
+                                                    viewModel.markOpened(item)
+                                                    openURL(url)
+                                                }
+                                            } label: {
+                                                Label("Apri nel browser", systemImage: "safari.fill")
                                             }
-                                        } label: {
-                                            Label("Apri nel browser", systemImage: "safari.fill")
-                                        }
-                                        .buttonStyle(.borderedProminent)
+                                            .buttonStyle(.borderedProminent)
 
-                                        Button {
-                                            viewModel.setRead(item, read: item.isUnread)
-                                        } label: {
-                                            Label(item.isUnread ? "Segna letto" : "Da leggere", systemImage: item.isUnread ? "checkmark.circle" : "book.closed")
+                                            Button {
+                                                if extractedArticle != nil {
+                                                    showingReaderMode = true
+                                                } else {
+                                                    isIndexing = true
+                                                    Task {
+                                                        _ = await ContentIndexer.shared.indexItem(item, force: true)
+                                                        await MainActor.run {
+                                                            viewModel.reloadAll()
+                                                            isIndexing = false
+                                                            if ExtractedArticle.fromJson(viewModel.itemContentsById[item.id]?.articleJson) != nil {
+                                                                showingReaderMode = true
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } label: {
+                                                Label(isIndexing ? "Scaricamento…" : "Modalità lettura", systemImage: "doc.plaintext")
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(isIndexing)
+
+                                            Button {
+                                                viewModel.setRead(item, read: item.isUnread)
+                                            } label: {
+                                                Label(item.isUnread ? "Segna letto" : "Da leggere", systemImage: item.isUnread ? "checkmark.circle" : "book.closed")
+                                            }
+                                            .buttonStyle(.bordered)
                                         }
-                                        .buttonStyle(.bordered)
                                     }
                                 }
                                 .padding(12)
@@ -115,20 +175,115 @@ struct ItemDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                             }
 
+                            // Audio player section
+                            if item.itemType == .AUDIO,
+                               let fileUrl = FileStorageManager.shared.resolveMediaFile(item.contentUrl),
+                               FileManager.default.fileExists(atPath: fileUrl.path) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack(spacing: 14) {
+                                        Button {
+                                            audioPlayer.loadAndToggle(url: fileUrl)
+                                        } label: {
+                                            Image(systemName: audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                .font(.system(size: 42))
+                                                .foregroundStyle(palette.primary)
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Registrazione vocale / Audio")
+                                                .font(.subheadline.weight(.semibold))
+                                            let total = max(audioPlayer.durationMs, item.audioDurationMs ?? 0)
+                                            Text("\(formatMs(audioPlayer.currentTimeMs)) / \(formatMs(total))")
+                                                .font(.caption.monospacedDigit())
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+
+                                        Button {
+                                            isIndexing = true
+                                            Task {
+                                                _ = await ContentIndexer.shared.indexItem(item, force: true)
+                                                await MainActor.run {
+                                                    viewModel.reloadAll()
+                                                    isIndexing = false
+                                                }
+                                            }
+                                        } label: {
+                                            Label(isIndexing ? "Trascrizione…" : "Trascrivi", systemImage: "waveform.and.mic")
+                                                .font(.caption.weight(.semibold))
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(isIndexing)
+                                    }
+                                }
+                                .padding(14)
+                                .background(palette.surfaceContainer)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+
                             // Media preview (Photo / Drawing / PDF)
                             if (item.itemType == .PHOTO || item.itemType == .DRAWING),
                                let fileUrl = FileStorageManager.shared.resolveMediaFile(item.contentUrl),
                                let uiImage = UIImage(contentsOfFile: fileUrl.path) {
-                                Image(uiImage: uiImage)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Image(uiImage: uiImage)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            showingDrawingCanvas = true
+                                        } label: {
+                                            Label("Disegna sopra", systemImage: "pencil.tip.crop.circle")
+                                                .font(.caption.weight(.semibold))
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        Button {
+                                            isIndexing = true
+                                            Task {
+                                                _ = await ContentIndexer.shared.indexItem(item, force: true)
+                                                await MainActor.run {
+                                                    viewModel.reloadAll()
+                                                    isIndexing = false
+                                                }
+                                            }
+                                        } label: {
+                                            Label(isIndexing ? "OCR in corso…" : "Estrai testo (OCR)", systemImage: "text.viewfinder")
+                                                .font(.caption.weight(.semibold))
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(isIndexing)
+                                    }
+                                }
                             } else if item.itemType == .PDF,
                                       let fileUrl = FileStorageManager.shared.resolveMediaFile(item.contentUrl),
                                       FileManager.default.fileExists(atPath: fileUrl.path) {
-                                PdfQuickPreview(url: fileUrl)
-                                    .frame(height: 420)
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                VStack(alignment: .leading, spacing: 10) {
+                                    PdfQuickPreview(url: fileUrl)
+                                        .frame(height: 420)
+                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            isIndexing = true
+                                            Task {
+                                                _ = await ContentIndexer.shared.indexItem(item, force: true)
+                                                await MainActor.run {
+                                                    viewModel.reloadAll()
+                                                    isIndexing = false
+                                                }
+                                            }
+                                        } label: {
+                                            Label(isIndexing ? "Estrazione…" : "Estrai testo PDF / OCR", systemImage: "doc.text.magnifyingglass")
+                                                .font(.caption.weight(.semibold))
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(isIndexing)
+                                    }
+                                }
                             }
 
                             // Checklist
@@ -161,24 +316,44 @@ struct ItemDetailView: View {
 
                             // RichText Description / Note
                             if let desc = item.description, !desc.isEmpty {
-                                Text(RichText.render(desc))
-                                    .font(.body)
-                                    .foregroundColor(palette.onSurface)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(14)
-                                    .background(palette.surfaceContainer)
-                                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text(RichText.render(desc))
+                                        .font(.body)
+                                        .foregroundColor(palette.onSurface)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    Button {
+                                        readAloud.start(title: item.title, body: RichText.toPlainString(desc))
+                                    } label: {
+                                        Label("Leggi ad alta voce", systemImage: "speaker.wave.2.fill")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                                .padding(14)
+                                .background(palette.surfaceContainer)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             }
 
                             // Extracted content / OCR / Offline text if present
-                            if let content = viewModel.itemContentsById[item.id],
+                            if let content = itemContent,
                                let extracted = content.text,
                                !extracted.isEmpty {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Label("Testo estratto / Copia offline", systemImage: "doc.text.magnifyingglass")
-                                        .font(.caption.bold())
-                                        .foregroundColor(palette.primary)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Label("Testo estratto / Copia offline", systemImage: "doc.text.magnifyingglass")
+                                            .font(.caption.bold())
+                                            .foregroundColor(palette.primary)
+                                        Spacer()
+                                        Button {
+                                            readAloud.start(title: item.title, body: extracted)
+                                        } label: {
+                                            Label("Ascolta", systemImage: "speaker.wave.2.fill")
+                                                .font(.caption2.weight(.semibold))
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
                                     Text(extracted)
                                         .font(.footnote)
                                         .foregroundColor(palette.onSurfaceVariant)
@@ -191,11 +366,22 @@ struct ItemDetailView: View {
                             }
                         }
                         .padding(16)
+                        .padding(.bottom, readAloud.isActive ? 90 : 20)
                     }
+
+                    ReadAloudBar(manager: readAloud)
+                        .padding(.bottom, 8)
                 }
             }
             .navigationTitle("Dettaglio")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                prepareShareFiles()
+            }
+            .onDisappear {
+                audioPlayer.stop()
+                readAloud.stop()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Chiudi") { dismiss() }
@@ -216,6 +402,19 @@ struct ItemDetailView: View {
                             }
 
                             Menu {
+                                if let pkgUrl = sharePackageUrl {
+                                    ShareLink(item: pkgUrl) {
+                                        Label("Condividi pacchetto (.paperclip)", systemImage: "shippingbox.fill")
+                                    }
+                                }
+                                if let htmlUrl = shareHtmlUrl {
+                                    ShareLink(item: htmlUrl) {
+                                        Label("Condividi pagina web (.html)", systemImage: "globe")
+                                    }
+                                }
+
+                                Divider()
+
                                 Button {
                                     viewModel.toggleArchive(entry)
                                     dismiss()
@@ -238,7 +437,33 @@ struct ItemDetailView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showingReaderMode) {
+                if let art = extractedArticle {
+                    ReaderModeSheet(item: item, article: art) { updatedHighlights in
+                        viewModel.updateArticleHighlights(for: item, highlights: updatedHighlights)
+                    }
+                }
+            }
+            .sheet(isPresented: $showingDrawingCanvas) {
+                DrawingCanvasSheet(backgroundImagePath: item.contentUrl) { newPath in
+                    var updated = item
+                    updated.contentUrl = newPath
+                    updated.updatedAt = ArchiveItem.nowMillis()
+                    viewModel.saveItem(updated, tagIds: entry.tags.map(\.id))
+                }
+            }
         }
+    }
+
+    private func prepareShareFiles() {
+        let sel = ShareSelection.forItems([item.id], label: item.title)
+        sharePackageUrl = try? SharePackage.writePackageToTempFile(selection: sel)
+        shareHtmlUrl = try? SharePackage.writeHtmlToTempFile(selection: sel)
+    }
+
+    private func formatMs(_ ms: Int64) -> String {
+        let sec = Int(max(0, ms) / 1000)
+        return String(format: "%02d:%02d", sec / 60, sec % 60)
     }
 }
 

@@ -24,6 +24,7 @@ final class MainViewModel: ObservableObject {
     @Published private(set) var folders: [Folder] = []
     @Published private(set) var tags: [Tag] = []
     @Published private(set) var itemContentsById: [Int64: ItemContent] = [:]
+    @Published var brokenLinksMap: [Int64: LinkChecker.BrokenInfo] = LinkChecker.loadMap()
 
     // Filters
     @Published var selectedType: ItemType? = nil
@@ -48,6 +49,7 @@ final class MainViewModel: ObservableObject {
     init() {
         reloadAll()
         purgeExpiredTrash()
+        indexPendingItemsInBackground()
     }
 
     var folderTree: FolderTree {
@@ -162,6 +164,7 @@ final class MainViewModel: ObservableObject {
         allItemsWithDetails = database.getAllItemsWithDetails()
         let contents = database.getAllItemContents()
         itemContentsById = Dictionary(uniqueKeysWithValues: contents.map { ($0.itemId, $0) })
+        brokenLinksMap = LinkChecker.loadMap()
     }
 
     private func sortItems(_ list: [ArchiveItemWithDetails], by order: SortOrder) -> [ArchiveItemWithDetails] {
@@ -194,12 +197,57 @@ final class MainViewModel: ObservableObject {
 
     @discardableResult
     func saveItem(_ item: ArchiveItem, tagIds: [Int64]) -> Int64 {
-        let savedId = database.saveItemWithTags(item, tagIds: tagIds)
+        let isNew = item.id == 0
+        let (finalItem, finalTags): (ArchiveItem, [Int64]) = isNew
+            ? AutoRules.apply(item: item, tagIds: tagIds)
+            : (item, tagIds)
+
+        let savedId = database.saveItemWithTags(finalItem, tagIds: finalTags)
         reloadAll()
         if let updated = allItemsWithDetails.first(where: { $0.id == savedId })?.item {
             scheduleReminderIfNeeded(for: updated)
+            Task {
+                _ = await ContentIndexer.shared.indexItem(updated, force: false, db: self.database)
+                await MainActor.run {
+                    self.reloadAll()
+                }
+            }
         }
         return savedId
+    }
+
+    func reindexItem(_ item: ArchiveItem) {
+        Task {
+            _ = await ContentIndexer.shared.indexItem(item, force: true, db: self.database)
+            await MainActor.run {
+                self.reloadAll()
+            }
+        }
+    }
+
+    func indexPendingItemsInBackground() {
+        let items = allItemsWithDetails.map(\.item).filter { $0.deletedAt == nil }
+        Task.detached(priority: .utility) {
+            var didUpdate = false
+            for item in items.prefix(15) {
+                if await ContentIndexer.shared.indexItem(item, force: false) != nil {
+                    didUpdate = true
+                }
+            }
+            if didUpdate {
+                await MainActor.run {
+                    self.reloadAll()
+                }
+            }
+        }
+    }
+
+    func updateArticleHighlights(for item: ArchiveItem, highlights: [ArticleHighlight]) {
+        var updated = item
+        updated.highlightsJson = ArticleHighlight.toJson(highlights)
+        updated.updatedAt = ArchiveItem.nowMillis()
+        database.insertOrReplaceItem(updated)
+        reloadAll()
     }
 
     func findLinkDuplicate(url: String?, excludeId: Int64 = 0) -> ArchiveItem? {
@@ -287,6 +335,7 @@ final class MainViewModel: ObservableObject {
             for item in items {
                 database.deleteItemPermanently(item.id)
                 cancelReminder(itemId: item.id)
+                LinkChecker.clearForItem(item.id)
                 if ItemType.mediaTypes.contains(item.itemType) {
                     fileStorage.deleteFile(item.contentUrl)
                 }
@@ -375,7 +424,7 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Private Items (Face ID / Passcode)
+    // MARK: - Private Items (PIN / Face ID)
 
     func unlockPrivateItems() {
         let context = LAContext()
@@ -385,18 +434,20 @@ final class MainViewModel: ObservableObject {
                 Task { @MainActor in
                     if success {
                         self.privateUnlocked = true
+                        AppLockManager.shared.isPrivateVaultUnlocked = true
                         AppLogger.shared.info("Sicurezza", "Elementi privati sbloccati con successo")
                     }
                 }
             }
         } else {
-            // Fallback for simulator or device without passcode set
             privateUnlocked = true
+            AppLockManager.shared.isPrivateVaultUnlocked = true
         }
     }
 
     func lockPrivateItems() {
         privateUnlocked = false
+        AppLockManager.shared.isPrivateVaultUnlocked = false
     }
 
     // MARK: - Local Reminders

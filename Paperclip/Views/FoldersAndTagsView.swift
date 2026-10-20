@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct FoldersAndTagsView: View {
     @ObservedObject var viewModel: MainViewModel
@@ -15,6 +16,10 @@ struct FoldersAndTagsView: View {
     @State private var tagName: String = ""
     @State private var tagColorHex: String = "#03DAC6"
 
+    @State private var showingPackageImporter: Bool = false
+    @State private var importTargetFolderId: Int64? = nil
+    @State private var statusBanner: String? = nil
+
     private let colorChoices: [(String, String)] = [
         ("Viola", "#6200EE"),
         ("Blu", "#1E5BD8"),
@@ -29,6 +34,20 @@ struct FoldersAndTagsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let banner = statusBanner {
+                    Section {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text(banner)
+                                .font(.caption)
+                            Spacer()
+                            Button("OK") { statusBanner = nil }
+                                .font(.caption.bold())
+                        }
+                    }
+                }
+
                 Section {
                     if viewModel.folderTree.entries.isEmpty {
                         Text("Nessuna cartella creata.")
@@ -60,6 +79,40 @@ struct FoldersAndTagsView: View {
                             .onTapGesture {
                                 beginEditFolder(entry.folder)
                             }
+                            .contextMenu {
+                                Button {
+                                    beginEditFolder(entry.folder)
+                                } label: {
+                                    Label("Modifica cartella", systemImage: "pencil")
+                                }
+
+                                let sel = ShareSelection.forFolder(entry.folder.id)
+                                if let pkgUrl = try? SharePackage.writePackageToTempFile(selection: sel) {
+                                    ShareLink(item: pkgUrl) {
+                                        Label("Condividi cartella (.paperclip)", systemImage: "shippingbox.fill")
+                                    }
+                                }
+                                if let htmlUrl = try? SharePackage.writeHtmlToTempFile(selection: sel) {
+                                    ShareLink(item: htmlUrl) {
+                                        Label("Condividi cartella (.html)", systemImage: "globe")
+                                    }
+                                }
+
+                                Button {
+                                    importTargetFolderId = entry.folder.id
+                                    showingPackageImporter = true
+                                } label: {
+                                    Label("Importa .paperclip qui…", systemImage: "square.and.arrow.down")
+                                }
+
+                                Divider()
+
+                                Button(role: .destructive) {
+                                    viewModel.deleteFolder(entry.folder)
+                                } label: {
+                                    Label("Elimina cartella", systemImage: "trash")
+                                }
+                            }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     viewModel.deleteFolder(entry.folder)
@@ -74,6 +127,15 @@ struct FoldersAndTagsView: View {
                         Text("Cartelle e Sottocartelle")
                         Spacer()
                         Button {
+                            importTargetFolderId = nil
+                            showingPackageImporter = true
+                        } label: {
+                            Label("Importa .paperclip", systemImage: "shippingbox")
+                                .font(.caption.bold())
+                        }
+                        .padding(.trailing, 8)
+
+                        Button {
                             beginNewFolder()
                         } label: {
                             Label("Nuova", systemImage: "folder.badge.plus")
@@ -81,7 +143,7 @@ struct FoldersAndTagsView: View {
                         }
                     }
                 } footer: {
-                    Text("Eliminando una cartella, le sue sottocartelle e i suoi elementi salgono al livello superiore (come su Android).")
+                    Text("Tieni premuto su una cartella per condividerla come pacchetto .paperclip o pagina .html. Eliminando una cartella, le sue sottocartelle e i suoi elementi salgono al livello superiore.")
                 }
 
                 Section {
@@ -130,6 +192,23 @@ struct FoldersAndTagsView: View {
             }
             .sheet(isPresented: $showingTagDialog) {
                 tagEditorSheet
+            }
+            .fileImporter(
+                isPresented: $showingPackageImporter,
+                allowedContentTypes: [.item, .zip, .data],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                    if let data = try? Data(contentsOf: url),
+                       let res = try? SharePackage.importPackage(data: data, targetFolderId: importTargetFolderId) {
+                        viewModel.reloadAll()
+                        statusBanner = "Importati \(res.itemsImported) elementi (\(res.mediaCopied) media)."
+                    } else {
+                        statusBanner = "File .paperclip non valido."
+                    }
+                }
             }
         }
     }

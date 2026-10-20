@@ -18,6 +18,11 @@ struct MainNavigationView: View {
     @State private var initialAddType: ItemType = .NOTE
     @State private var selectedItemForDetail: ArchiveItemWithDetails? = nil
     @State private var itemToEdit: ArchiveItemWithDetails? = nil
+    @State private var showingP2PSync: Bool = false
+    @State private var showingHighlightsHub: Bool = false
+    @State private var showingQuickScanner: Bool = false
+    @State private var showingQuickDrawing: Bool = false
+    @State private var showingQuickCamera: Bool = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -95,6 +100,51 @@ struct MainNavigationView: View {
                 }
             )
         }
+        .sheet(isPresented: $showingP2PSync) {
+            P2PSyncView()
+                .environmentObject(viewModel)
+        }
+        .sheet(isPresented: $showingHighlightsHub) {
+            HighlightsHubSheet(viewModel: viewModel) { entry in
+                showingHighlightsHub = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    selectedItemForDetail = entry
+                }
+            }
+        }
+        .sheet(isPresented: $showingQuickScanner) {
+            DocumentScannerView { pdfPath, pages in
+                let item = ArchiveItem(
+                    title: "Scansione (\(pages) pag.)",
+                    itemType: .PDF,
+                    contentUrl: pdfPath,
+                    folderId: viewModel.selectedFolderId
+                )
+                viewModel.saveItem(item, tagIds: [])
+            }
+        }
+        .sheet(isPresented: $showingQuickDrawing) {
+            DrawingCanvasSheet { drawingPath in
+                let item = ArchiveItem(
+                    title: "Disegno",
+                    itemType: .DRAWING,
+                    contentUrl: drawingPath,
+                    folderId: viewModel.selectedFolderId
+                )
+                viewModel.saveItem(item, tagIds: [])
+            }
+        }
+        .sheet(isPresented: $showingQuickCamera) {
+            CameraCaptureView { photoPath in
+                let item = ArchiveItem(
+                    title: "Foto",
+                    itemType: .PHOTO,
+                    contentUrl: photoPath,
+                    folderId: viewModel.selectedFolderId
+                )
+                viewModel.saveItem(item, tagIds: [])
+            }
+        }
     }
 
     // MARK: - Feed Tab
@@ -141,7 +191,7 @@ struct MainNavigationView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 96)
                 }
-                .searchable(text: $viewModel.searchQuery, prompt: "Cerca in Paperclip…")
+                .searchable(text: $viewModel.searchQuery, prompt: "Cerca nel testo, OCR, PDF, trascrizioni…")
 
                 Menu {
                     Button {
@@ -162,11 +212,34 @@ struct MainNavigationView: View {
                     } label: {
                         Label("Nuovo link", systemImage: "link")
                     }
+                    Divider()
+                    Button {
+                        showingQuickCamera = true
+                    } label: {
+                        Label("Scatta foto", systemImage: "camera.fill")
+                    }
+                    Button {
+                        initialAddType = .AUDIO
+                        showingAddSheet = true
+                    } label: {
+                        Label("Nota vocale", systemImage: "mic.fill")
+                    }
+                    Button {
+                        showingQuickScanner = true
+                    } label: {
+                        Label("Scansiona documento (PDF)", systemImage: "doc.viewfinder")
+                    }
+                    Button {
+                        showingQuickDrawing = true
+                    } label: {
+                        Label("Disegno a mano libera", systemImage: "scribble.variable")
+                    }
+                    Divider()
                     Button {
                         initialAddType = .PHOTO
                         showingAddSheet = true
                     } label: {
-                        Label("Foto / Media / PDF", systemImage: "photo.on.rectangle")
+                        Label("Importa Foto / Video / PDF", systemImage: "photo.on.rectangle")
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -183,17 +256,35 @@ struct MainNavigationView: View {
             .navigationTitle("Paperclip")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if viewModel.allItemsWithDetails.contains(where: { $0.item.isPrivate && $0.item.deletedAt == nil }) {
+                    HStack(spacing: 12) {
                         Button {
-                            if viewModel.privateUnlocked {
-                                viewModel.lockPrivateItems()
-                            } else {
-                                viewModel.unlockPrivateItems()
-                            }
+                            showingP2PSync = true
                         } label: {
-                            Image(systemName: viewModel.privateUnlocked ? "lock.open.fill" : "lock.fill")
+                            Image(systemName: "antenna.radiowaves.left.and.right")
                         }
-                        .accessibilityLabel(viewModel.privateUnlocked ? "Blocca elementi privati" : "Sblocca elementi privati")
+                        .accessibilityLabel("Sincronizzazione Wi-Fi P2P")
+
+                        if !viewModel.highlightedItems.isEmpty {
+                            Button {
+                                showingHighlightsHub = true
+                            } label: {
+                                Image(systemName: "highlighter")
+                            }
+                            .accessibilityLabel("Evidenziazioni")
+                        }
+
+                        if viewModel.allItemsWithDetails.contains(where: { $0.item.isPrivate && $0.item.deletedAt == nil }) {
+                            Button {
+                                if viewModel.privateUnlocked {
+                                    viewModel.lockPrivateItems()
+                                } else {
+                                    viewModel.unlockPrivateItems()
+                                }
+                            } label: {
+                                Image(systemName: viewModel.privateUnlocked ? "lock.open.fill" : "lock.fill")
+                            }
+                            .accessibilityLabel(viewModel.privateUnlocked ? "Blocca elementi privati" : "Sblocca elementi privati")
+                        }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -364,7 +455,7 @@ struct MainNavigationView: View {
             Text(viewModel.narrowsFeed ? "Nessun elemento corrisponde ai filtri" : "Il tuo archivio è vuoto")
                 .font(.headline)
                 .foregroundColor(palette.onSurface)
-            Text(viewModel.narrowsFeed ? "Prova a modificare la ricerca o i filtri selezionati." : "Tocca il pulsante + in basso a destra per aggiungere una nota, una checklist, un link o un file.")
+            Text(viewModel.narrowsFeed ? "Prova a modificare la ricerca o i filtri selezionati." : "Tocca il pulsante + in basso a destra per aggiungere una nota, una checklist, un link, una foto, una nota vocale o una scansione PDF.")
                 .font(.subheadline)
                 .foregroundColor(palette.onSurfaceVariant)
                 .multilineTextAlignment(.center)
@@ -419,6 +510,64 @@ struct MainNavigationView: View {
                 }
             }
             .navigationTitle("Archivio")
+        }
+    }
+}
+
+struct HighlightsHubSheet: View {
+    @ObservedObject var viewModel: MainViewModel
+    var onSelectEntry: (ArchiveItemWithDetails) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(viewModel.highlightedItems) { entry in
+                    Section(entry.item.title) {
+                        if entry.item.itemType == .LINK {
+                            ForEach(ArticleHighlight.fromJson(entry.item.highlightsJson)) { h in
+                                Button {
+                                    onSelectEntry(entry)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("“\(h.text)”")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        if let note = h.note, !note.isEmpty {
+                                            Text(note)
+                                                .font(.caption)
+                                                .italic()
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                        } else if entry.item.itemType == .PDF {
+                            ForEach(PdfHighlight.fromJson(entry.item.highlightsJson)) { h in
+                                Button {
+                                    onSelectEntry(entry)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("“\(h.text ?? "Evidenziazione pag. \(h.page + 1)")”")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        Text("Pagina \(h.page + 1)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Tutte le evidenziazioni")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Chiudi") { dismiss() }
+                }
+            }
         }
     }
 }

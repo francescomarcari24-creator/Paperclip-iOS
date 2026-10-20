@@ -12,6 +12,7 @@ struct AddEditItemView: View {
     @State private var title: String
     @State private var descriptionText: String
     @State private var contentUrl: String
+    @State private var audioDurationMs: Int64?
     @State private var selectedFolderId: Int64?
     @State private var selectedTagIds: Set<Int64>
     @State private var checklistItems: [ChecklistItem]
@@ -22,7 +23,12 @@ struct AddEditItemView: View {
     @State private var reminderTime: Date
     @State private var newTagName: String = ""
     @State private var showingFileImporter: Bool = false
+    @State private var showingCameraCapture: Bool = false
+    @State private var showingDocScanner: Bool = false
+    @State private var showingDrawingCanvas: Bool = false
     @State private var duplicateLinkAlertItem: ArchiveItem? = nil
+
+    @StateObject private var audioRecorder = AudioRecorderManager()
 
     init(viewModel: MainViewModel, existingEntry: ArchiveItemWithDetails?, defaultType: ItemType) {
         self.viewModel = viewModel
@@ -32,6 +38,7 @@ struct AddEditItemView: View {
         _title = State(initialValue: item?.title ?? "")
         _descriptionText = State(initialValue: item?.description ?? "")
         _contentUrl = State(initialValue: item?.contentUrl ?? "")
+        _audioDurationMs = State(initialValue: item?.audioDurationMs)
         _selectedFolderId = State(initialValue: item?.folderId ?? viewModel.selectedFolderId)
         _selectedTagIds = State(initialValue: Set(existingEntry?.tags.map(\.id) ?? []))
         _checklistItems = State(initialValue: ChecklistItem.fromJson(item?.checklistJson))
@@ -72,16 +79,7 @@ struct AddEditItemView: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     } else if ItemType.mediaTypes.contains(itemType) {
-                        HStack {
-                            Text(contentUrl.isEmpty ? "Nessun file selezionato" : (contentUrl as NSString).lastPathComponent)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                            Spacer()
-                            Button("Scegli file…") {
-                                showingFileImporter = true
-                            }
-                        }
+                        mediaCaptureSection
                     }
 
                     if itemType == .CHECKLIST {
@@ -169,10 +167,17 @@ struct AddEditItemView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Annulla") { dismiss() }
+                    Button("Annulla") {
+                        _ = audioRecorder.stopRecording()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Salva") {
+                        if audioRecorder.isRecording, let res = audioRecorder.stopRecording() {
+                            contentUrl = res.path
+                            audioDurationMs = res.durationMs
+                        }
                         attemptSave(ignoreDuplicateLink: false)
                     }
                     .bold()
@@ -189,6 +194,30 @@ struct AddEditItemView: View {
                         if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             title = url.deletingPathExtension().lastPathComponent
                         }
+                    }
+                }
+            }
+            .sheet(isPresented: $showingCameraCapture) {
+                CameraCaptureView { photoPath in
+                    contentUrl = photoPath
+                    if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        title = "Foto"
+                    }
+                }
+            }
+            .sheet(isPresented: $showingDocScanner) {
+                DocumentScannerView { pdfPath, pages in
+                    contentUrl = pdfPath
+                    if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        title = "Scansione (\(pages) pag.)"
+                    }
+                }
+            }
+            .sheet(isPresented: $showingDrawingCanvas) {
+                DrawingCanvasSheet(backgroundImagePath: itemType == .PHOTO && !contentUrl.isEmpty ? contentUrl : nil) { drawingPath in
+                    contentUrl = drawingPath
+                    if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        title = itemType == .PHOTO ? "Foto annotata" : "Disegno"
                     }
                 }
             }
@@ -209,6 +238,103 @@ struct AddEditItemView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var mediaCaptureSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(contentUrl.isEmpty ? "Nessun file selezionato" : (contentUrl as NSString).lastPathComponent)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                Button("Scegli file…") {
+                    showingFileImporter = true
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if itemType == .PHOTO {
+                HStack(spacing: 10) {
+                    Button {
+                        showingCameraCapture = true
+                    } label: {
+                        Label("Scatta foto", systemImage: "camera.fill")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if !contentUrl.isEmpty {
+                        Button {
+                            showingDrawingCanvas = true
+                        } label: {
+                            Label("Disegna sopra", systemImage: "pencil.tip.crop.circle")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            } else if itemType == .PDF {
+                Button {
+                    showingDocScanner = true
+                } label: {
+                    Label("Scansiona documento con fotocamera", systemImage: "doc.viewfinder")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+            } else if itemType == .DRAWING {
+                Button {
+                    showingDrawingCanvas = true
+                } label: {
+                    Label(contentUrl.isEmpty ? "Apri tela di disegno" : "Modifica disegno", systemImage: "scribble.variable")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+            } else if itemType == .AUDIO {
+                HStack(spacing: 12) {
+                    if audioRecorder.isRecording {
+                        Button(role: .destructive) {
+                            if let res = audioRecorder.stopRecording() {
+                                contentUrl = res.path
+                                audioDurationMs = res.durationMs
+                                if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    title = "Nota vocale"
+                                }
+                            }
+                        } label: {
+                            Label("Ferma (\(formatMs(audioRecorder.elapsedMs)))", systemImage: "stop.circle.fill")
+                                .font(.caption.weight(.bold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        Button {
+                            audioRecorder.startRecording()
+                        } label: {
+                            Label("Registra nota vocale", systemImage: "mic.circle.fill")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    if let dur = audioDurationMs, !audioRecorder.isRecording {
+                        Text("Durata: \(formatMs(dur))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let err = audioRecorder.errorMessage {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private func formatMs(_ ms: Int64) -> String {
+        let totalSec = Int(ms / 1000)
+        return String(format: "%02d:%02d", totalSec / 60, totalSec % 60)
     }
 
     private var richTextToolbar: some View {
@@ -287,7 +413,9 @@ struct AddEditItemView: View {
         let effectiveTitle: String = {
             let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty { return t }
-            if itemType == .LINK && !contentUrl.isEmpty { return contentUrl }
+            if itemType == .LINK && !contentUrl.isEmpty {
+                return LinkUrls.defaultTitleForUrl(contentUrl) ?? contentUrl
+            }
             return itemType.label
         }()
 
@@ -298,7 +426,6 @@ struct AddEditItemView: View {
         }()
 
         let now = ArchiveItem.nowMillis()
-        // Crucial for P2P merge compatibility (CLAUDE.md): preserve original createdAt on edit!
         let item = ArchiveItem(
             id: original?.id ?? 0,
             title: effectiveTitle,
@@ -307,7 +434,7 @@ struct AddEditItemView: View {
             contentUrl: contentUrl.isEmpty ? nil : contentUrl,
             previewImageUrl: original?.previewImageUrl,
             folderId: selectedFolderId,
-            audioDurationMs: original?.audioDurationMs,
+            audioDurationMs: audioDurationMs ?? original?.audioDurationMs,
             checklistJson: itemType == .CHECKLIST ? ChecklistItem.toJson(checklistItems) : nil,
             highlightsJson: original?.highlightsJson,
             reminderMinutes: reminderMins,
