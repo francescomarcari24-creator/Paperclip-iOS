@@ -273,13 +273,14 @@ struct MainNavigationView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        withAnimation {
-                            preferences.showFeedFilters.toggle()
+                    Toggle("Mostra filtri", isOn: Binding(
+                        get: { preferences.showFeedFilters },
+                        set: { newValue in
+                            withAnimation { preferences.showFeedFilters = newValue }
                         }
-                    } label: {
-                        Image(systemName: preferences.showFeedFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                    }
+                    ))
+                    .labelsHidden()
+                    .scaleEffect(0.8)
                     .accessibilityLabel("Mostra filtri")
                 }
             }
