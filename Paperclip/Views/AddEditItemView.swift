@@ -29,6 +29,7 @@ struct AddEditItemView: View {
     @State private var duplicateLinkAlertItem: ArchiveItem? = nil
 
     @StateObject private var audioRecorder = AudioRecorderManager()
+    @StateObject private var richTextController = RichTextFormattingController()
 
     init(viewModel: MainViewModel, existingEntry: ArchiveItemWithDetails?, defaultType: ItemType) {
         self.viewModel = viewModel
@@ -59,107 +60,123 @@ struct AddEditItemView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Tipo di elemento") {
-                    Picker("Tipo", selection: $itemType) {
-                        ForEach(ItemType.allCases) { type in
-                            Label(type.label, systemImage: type.systemIcon).tag(type)
-                        }
-                    }
-                    .pickerStyle(.menu)
+            VStack(spacing: 0) {
+                if itemType != .CHECKLIST {
+                    RichTextFormattingBar(controller: richTextController)
                 }
 
-                Section("Contenuto") {
-                    TextField("Titolo", text: $title)
-                        .font(.headline)
-
-                    if itemType == .LINK {
-                        TextField("Indirizzo URL (es. https://…)", text: $contentUrl)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    } else if ItemType.mediaTypes.contains(itemType) {
-                        mediaCaptureSection
+                Form {
+                    Section("Tipo di elemento") {
+                        Picker("Tipo", selection: $itemType) {
+                            ForEach(ItemType.allCases) { type in
+                                Label(type.label, systemImage: type.systemIcon).tag(type)
+                            }
+                        }
+                        .pickerStyle(.menu)
                     }
 
-                    if itemType == .CHECKLIST {
-                        checklistEditor
-                    } else {
+                    Section("Contenuto") {
+                        TextField("Titolo", text: $title)
+                            .font(.headline)
+
+                        if itemType == .LINK {
+                            TextField("Indirizzo URL (es. https://…)", text: $contentUrl)
+                                .keyboardType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        } else if ItemType.mediaTypes.contains(itemType) {
+                            mediaCaptureSection
+                        }
+
+                        if itemType == .CHECKLIST {
+                            checklistEditor
+                        } else {
+                            ZStack(alignment: .topLeading) {
+                                if descriptionText.isEmpty {
+                                    Text("Scrivi qui il contenuto della nota…")
+                                        .font(.body)
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.top, 10)
+                                        .padding(.leading, 8)
+                                        .allowsHitTesting(false)
+                                }
+                                VisualRichTextEditor(
+                                    markdownText: $descriptionText,
+                                    controller: richTextController
+                                )
+                                .frame(minHeight: 160)
+                            }
+                        }
+                    }
+
+                    Section("Organizzazione") {
+                        Picker("Cartella", selection: $selectedFolderId) {
+                            Text("Nessuna cartella").tag(Int64?.none)
+                            ForEach(viewModel.folderTree.entries) { entry in
+                                let indent = String(repeating: "— ", count: entry.depth)
+                                Text("\(indent)\(entry.folder.name)").tag(Int64?.some(entry.folder.id))
+                            }
+                        }
+
                         VStack(alignment: .leading, spacing: 8) {
-                            richTextToolbar
-                            TextEditor(text: $descriptionText)
-                                .frame(minHeight: 140)
-                        }
-                    }
-                }
+                            Text("Tag")
+                                .font(.subheadline.weight(.medium))
 
-                Section("Organizzazione") {
-                    Picker("Cartella", selection: $selectedFolderId) {
-                        Text("Nessuna cartella").tag(Int64?.none)
-                        ForEach(viewModel.folderTree.entries) { entry in
-                            let indent = String(repeating: "— ", count: entry.depth)
-                            Text("\(indent)\(entry.folder.name)").tag(Int64?.some(entry.folder.id))
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Tag")
-                            .font(.subheadline.weight(.medium))
-
-                        if !viewModel.tags.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(viewModel.tags) { tag in
-                                        FilterChip(
-                                            title: "#\(tag.name)",
-                                            icon: nil,
-                                            isSelected: selectedTagIds.contains(tag.id)
-                                        ) {
-                                            if selectedTagIds.contains(tag.id) {
-                                                selectedTagIds.remove(tag.id)
-                                            } else {
-                                                selectedTagIds.insert(tag.id)
+                            if !viewModel.tags.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(viewModel.tags) { tag in
+                                            FilterChip(
+                                                title: "#\(tag.name)",
+                                                icon: nil,
+                                                isSelected: selectedTagIds.contains(tag.id)
+                                            ) {
+                                                if selectedTagIds.contains(tag.id) {
+                                                    selectedTagIds.remove(tag.id)
+                                                } else {
+                                                    selectedTagIds.insert(tag.id)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        HStack {
-                            TextField("Nuovo tag…", text: $newTagName)
-                            Button("Aggiungi") {
-                                let trimmed = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                guard !trimmed.isEmpty else { return }
-                                if let existing = viewModel.tags.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-                                    selectedTagIds.insert(existing.id)
-                                } else {
-                                    let newId = PaperclipDatabase.shared.saveTag(Tag(name: trimmed))
-                                    viewModel.reloadAll()
-                                    selectedTagIds.insert(newId)
+                            HStack {
+                                TextField("Nuovo tag…", text: $newTagName)
+                                Button("Aggiungi") {
+                                    let trimmed = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !trimmed.isEmpty else { return }
+                                    if let existing = viewModel.tags.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+                                        selectedTagIds.insert(existing.id)
+                                    } else {
+                                        let newId = PaperclipDatabase.shared.saveTag(Tag(name: trimmed))
+                                        viewModel.reloadAll()
+                                        selectedTagIds.insert(newId)
+                                    }
+                                    newTagName = ""
                                 }
-                                newTagName = ""
+                                .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             }
-                            .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
-                }
 
-                Section("Opzioni e Sicurezza") {
-                    Toggle(isOn: $isPinned) {
-                        Label("Fissa in alto nel feed", systemImage: "pin.fill")
-                    }
+                    Section("Opzioni e Sicurezza") {
+                        Toggle(isOn: $isPinned) {
+                            Label("Fissa in alto nel feed", systemImage: "pin.fill")
+                        }
 
-                    Toggle(isOn: $isPrivate) {
-                        Label("Elemento privato (Face ID / Codice)", systemImage: "lock.fill")
-                    }
+                        Toggle(isOn: $isPrivate) {
+                            Label("Elemento privato (Face ID / Codice)", systemImage: "lock.fill")
+                        }
 
-                    Toggle(isOn: $hasReminder) {
-                        Label("Promemoria", systemImage: "bell.fill")
-                    }
+                        Toggle(isOn: $hasReminder) {
+                            Label("Promemoria", systemImage: "bell.fill")
+                        }
 
-                    if hasReminder {
-                        DatePicker("Orario promemoria", selection: $reminderTime, displayedComponents: .hourAndMinute)
+                        if hasReminder {
+                            DatePicker("Orario promemoria", selection: $reminderTime, displayedComponents: .hourAndMinute)
+                        }
                     }
                 }
             }
@@ -335,22 +352,6 @@ struct AddEditItemView: View {
     private func formatMs(_ ms: Int64) -> String {
         let totalSec = Int(ms / 1000)
         return String(format: "%02d:%02d", totalSec / 60, totalSec % 60)
-    }
-
-    private var richTextToolbar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Button("**B**") { descriptionText += " **testo** " }
-                Button("*I*") { descriptionText += " *testo* " }
-                Button("~~S~~") { descriptionText += " ~~testo~~ " }
-                Button("`Codice`") { descriptionText += " `codice` " }
-                Button("# Titolo") { descriptionText += "\n# " }
-                Button("• Elenco") { descriptionText += "\n- " }
-                Button("▏ Citazione") { descriptionText += "\n> " }
-            }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(.bordered)
-        }
     }
 
     private var checklistEditor: some View {
