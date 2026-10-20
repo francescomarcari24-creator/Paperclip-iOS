@@ -725,6 +725,7 @@ final class AppLockManager: ObservableObject {
             DispatchQueue.main.async { completion(false) }
             return
         }
+        ctx.localizedFallbackTitle = "Usa il PIN"
         ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
             DispatchQueue.main.async {
                 completion(success)

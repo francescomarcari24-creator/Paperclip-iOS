@@ -60,8 +60,32 @@ struct PaperclipApp: App {
 struct AppLockOverlayView: View {
     @ObservedObject var appLock: AppLockManager
     @Environment(\.paperclipPalette) private var palette
+    @Environment(\.scenePhase) private var scenePhase
     @State private var pinInput: String = ""
     @State private var errorText: String?
+    @State private var didAutoAttempt: Bool = false
+    @State private var showPin: Bool = true
+
+    private var biometricsAvailable: Bool {
+        appLock.biometricEnabled && appLock.canUseBiometrics()
+    }
+
+    /// Avvia Face ID una sola volta per blocco; il PIN compare solo se non riesce.
+    private func attemptBiometricUnlock() {
+        guard biometricsAvailable, !didAutoAttempt, !appLock.isAppUnlocked else { return }
+        didAutoAttempt = true
+        // Piccolo ritardo: con la scena appena attiva il sistema può annullare subito la richiesta.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard !appLock.isAppUnlocked else { return }
+            appLock.authenticateWithBiometrics(reason: "Sblocca Paperclip") { ok in
+                if ok {
+                    appLock.isAppUnlocked = true
+                } else {
+                    showPin = true
+                }
+            }
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -75,25 +99,28 @@ struct AppLockOverlayView: View {
                     .font(.title2.bold())
                     .foregroundStyle(palette.onSurface)
 
-                Text("Inserisci il tuo PIN o usa Face ID per sbloccare l'app.")
+                Text(showPin ? "Inserisci il tuo PIN o usa Face ID per sbloccare l'app." : "Sblocco con Face ID in corso…")
                     .font(.subheadline)
                     .foregroundStyle(palette.onSurfaceVariant)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
 
-                SecureField("PIN", text: $pinInput)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 220)
-                    .multilineTextAlignment(.center)
+                if showPin {
+                    SecureField("PIN", text: $pinInput)
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 220)
+                        .multilineTextAlignment(.center)
 
-                if let err = errorText {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    if let err = errorText {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 HStack(spacing: 14) {
+                    if showPin {
                     Button {
                         if appLock.verifyPin(pinInput) {
                             pinInput = ""
@@ -108,12 +135,15 @@ struct AppLockOverlayView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(pinInput.count < 4)
+                    }
 
-                    if appLock.biometricEnabled && appLock.canUseBiometrics() {
+                    if biometricsAvailable {
                         Button {
                             appLock.authenticateWithBiometrics(reason: "Sblocca Paperclip") { ok in
                                 if ok {
                                     appLock.isAppUnlocked = true
+                                } else {
+                                    showPin = true
                                 }
                             }
                         } label: {
@@ -126,12 +156,21 @@ struct AppLockOverlayView: View {
             .padding(24)
         }
         .onAppear {
-            if appLock.biometricEnabled && appLock.canUseBiometrics() {
-                appLock.authenticateWithBiometrics(reason: "Sblocca Paperclip") { ok in
-                    if ok {
-                        appLock.isAppUnlocked = true
-                    }
-                }
+            showPin = !biometricsAvailable
+            if scenePhase == .active {
+                attemptBiometricUnlock()
+            }
+        }
+        .onChange(of: scenePhase) { newPhase in
+            switch newPhase {
+            case .active:
+                attemptBiometricUnlock()
+            case .background:
+                // Al prossimo ritorno in primo piano si riprova con Face ID prima del PIN.
+                didAutoAttempt = false
+                showPin = !biometricsAvailable
+            default:
+                break
             }
         }
     }
