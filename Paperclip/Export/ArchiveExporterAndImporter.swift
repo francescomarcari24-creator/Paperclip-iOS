@@ -28,7 +28,7 @@ enum ArchiveExporter {
                 tagsByItem[ref.itemId, default: []].append(tag)
             }
         }
-        let contentByItem = Dictionary(uniqueKeysWithValues: rows.contents.map { ($0.itemId, $0) })
+        let contentByItem = Dictionary(uniqueKeysWithValues: (rows.contents ?? []).map { ($0.itemId, $0) })
 
         var usedPaths = Set<String>()
         var mediaFiles: [String: URL] = [:]
@@ -236,10 +236,10 @@ enum ArchiveExporter {
             out.append("\(indent)</DL><p>")
         }
 
-        for root in foldersByParent[nil] ?? [] {
+        for root in foldersByParent[nil as Int64?] ?? [] {
             emitFolder(root, indent: "    ")
         }
-        for item in itemsByFolder[nil] ?? [] {
+        for item in itemsByFolder[nil as Int64?] ?? [] {
             emitItem(item, indent: "    ")
         }
         out.append("</DL><p>")

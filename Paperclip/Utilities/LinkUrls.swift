@@ -45,4 +45,54 @@ enum LinkUrls {
         guard let keyA = normalize(a) else { return false }
         return keyA == normalize(b)
     }
+
+    /// Normalizes a raw web URL ensuring an `http://` or `https://` scheme and valid host.
+    static func normalizeWebUrl(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("javascript:") || lower.hasPrefix("data:") || lower.hasPrefix("about:") || lower.hasPrefix("chrome:") || lower.hasPrefix("place:") {
+            return nil
+        }
+        let withScheme: String
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
+            withScheme = trimmed
+        } else if trimmed.contains(".") && !trimmed.contains(" ") {
+            withScheme = "https://\(trimmed)"
+        } else {
+            return nil
+        }
+        guard let comps = URLComponents(string: withScheme),
+              let host = comps.host, !host.isEmpty else {
+            return nil
+        }
+        return comps.url?.absoluteString ?? withScheme
+    }
+
+    static func defaultTitleForUrl(_ raw: String?) -> String? {
+        guard let norm = normalizeWebUrl(raw),
+              let url = URL(string: norm),
+              let host = url.host else {
+            return nil
+        }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    static func extractFirstUrl(_ text: String) -> String? {
+        guard !text.isEmpty,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return nil
+        }
+        let nsText = text as NSString
+        let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        for match in matches {
+            if let url = match.url,
+               let scheme = url.scheme?.lowercased(),
+               scheme == "http" || scheme == "https" {
+                return url.absoluteString
+            }
+        }
+        return nil
+    }
 }

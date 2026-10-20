@@ -10,6 +10,28 @@ struct ArchiveRows: Codable {
     var items: [ArchiveItem]
     var crossRefs: [ItemTagCrossRef]
     var contents: [ItemContent]? = nil
+
+    static func load(db: PaperclipDatabase = .shared) -> ArchiveRows {
+        ArchiveRows(
+            folders: db.getAllFolders(),
+            tags: db.getAllTags(),
+            items: db.getAllItems(),
+            crossRefs: db.getAllCrossRefs(),
+            contents: db.getAllItemContents()
+        )
+    }
+
+    func activeOnly(includePrivate: Bool = false) -> ArchiveRows {
+        let activeItems = items.filter { $0.deletedAt == nil && (includePrivate || !$0.isPrivate) }
+        let activeIds = Set(activeItems.map(\.id))
+        return ArchiveRows(
+            folders: folders,
+            tags: tags,
+            items: activeItems,
+            crossRefs: crossRefs.filter { activeIds.contains($0.itemId) },
+            contents: (contents ?? []).filter { activeIds.contains($0.itemId) }
+        )
+    }
 }
 
 final class ArchiveMerger {
@@ -261,7 +283,7 @@ enum SharePackage {
         return fileUrl
     }
 
-    static func importPackage(from url: URL) throws -> (title: String, sender: String?, result: ArchiveMerger.Result) {
+    static func importPackage(from url: URL, targetFolderId: Int64? = nil) throws -> (title: String, sender: String?, result: ArchiveMerger.Result) {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
 
@@ -284,20 +306,51 @@ enum SharePackage {
             throw NSError(domain: "Paperclip", code: 400, userInfo: [NSLocalizedDescriptionKey: "Non è un pacchetto .paperclip valido"])
         }
 
+        var items = received.items
+        if let targetId = targetFolderId, received.folders.isEmpty {
+            items = items.map { var c = $0; c.folderId = targetId; return c }
+        }
+
         let rows = ArchiveRows(
             folders: received.folders,
             tags: received.tags,
-            items: received.items,
+            items: items,
             crossRefs: received.crossRefs,
             contents: received.contents
         )
-        let res = ArchiveMerger.init().merge(rows: rows, placement: .byPath) { path in
+        let placement: ArchiveMerger.FolderPlacement
+        if let targetId = targetFolderId, let rootFolder = received.folders.first(where: { $0.parentId == nil }) {
+            placement = .intoFolder(remoteRootId: rootFolder.id, localRootId: targetId)
+        } else {
+            placement = .byPath
+        }
+        let res = ArchiveMerger.init().merge(rows: rows, placement: placement) { path in
             guard let path = path, !path.isEmpty else { return path }
             if path.hasPrefix("http://") || path.hasPrefix("https://") { return path }
             let name = (path as NSString).lastPathComponent
             return FileStorageManager.shared.mediaDirectory.appendingPathComponent(name).path
         }
         return (received.title, received.sender, res)
+    }
+
+    static func writeItemPackage(item: ArchiveItem) -> URL? {
+        let rows = ShareSelection.ofItems(itemIds: [item.id], includePrivate: true)
+        return try? writePackage(rows: rows, title: item.title.isEmpty ? item.itemType.label : item.title)
+    }
+
+    static func writeItemHtml(item: ArchiveItem) -> URL? {
+        let rows = ShareSelection.ofItems(itemIds: [item.id], includePrivate: true)
+        return try? writeHtmlPage(rows: rows, title: item.title.isEmpty ? item.itemType.label : item.title)
+    }
+
+    static func writeFolderPackage(folder: Folder) -> URL? {
+        let rows = ShareSelection.ofFolder(folderId: folder.id)
+        return try? writePackage(rows: rows, title: folder.name)
+    }
+
+    static func writeFolderHtml(folder: Folder) -> URL? {
+        let rows = ShareSelection.ofFolder(folderId: folder.id)
+        return try? writeHtmlPage(rows: rows, title: folder.name)
     }
 
     static func writeHtmlPage(rows: ArchiveRows, title: String) throws -> URL {

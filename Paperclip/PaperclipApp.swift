@@ -34,12 +34,10 @@ struct PaperclipApp: App {
                 }
             }
             .onOpenURL { url in
-                let accessed = url.startAccessingSecurityScopedResource()
-                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-                if let data = try? Data(contentsOf: url),
-                   let res = try? SharePackage.importPackage(data: data) {
+                if let res = try? SharePackage.importPackage(from: url) {
                     viewModel.reloadAll()
-                    importedPackageBanner = "Importati \(res.itemsImported) elementi (\(res.mediaCopied) file multimediali)."
+                    let count = res.result.added + res.result.updated
+                    importedPackageBanner = "Importato \"\(res.title)\" (\(count) elementi)."
                 }
             }
             .onChange(of: scenePhase) { newPhase in

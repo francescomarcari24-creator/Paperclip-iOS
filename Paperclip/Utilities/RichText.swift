@@ -28,6 +28,14 @@ enum RichText {
         }.joined(separator: "\n")
     }
 
+    static func toPlainString(_ text: String) -> String {
+        strip(text)
+    }
+
+    static func toMarkdown(_ text: String) -> String {
+        text
+    }
+
     /// Renders the Paperclip Markdown subset (`**`, `*`/`_`, `~~`, `` ` ``, `# `, `## `, `- `, `> `) into a SwiftUI `AttributedString`.
     static func render(_ text: String) -> AttributedString {
         let lines = text.components(separatedBy: "\n")

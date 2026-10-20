@@ -48,143 +48,8 @@ struct FoldersAndTagsView: View {
                     }
                 }
 
-                Section {
-                    if viewModel.folderTree.entries.isEmpty {
-                        Text("Nessuna cartella creata.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(viewModel.folderTree.entries) { entry in
-                            HStack(spacing: 10) {
-                                if entry.depth > 0 {
-                                    Spacer()
-                                        .frame(width: CGFloat(entry.depth) * 18)
-                                }
-                                Circle()
-                                    .fill(Color(hexString: entry.folder.colorHex))
-                                    .frame(width: 12, height: 12)
-                                Image(systemName: "folder.fill")
-                                    .foregroundColor(Color(hexString: entry.folder.colorHex))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.folder.name)
-                                        .font(.body.weight(.medium))
-                                    if entry.depth > 0 {
-                                        Text(viewModel.folderTree.pathLabel(entry.folder.id))
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                beginEditFolder(entry.folder)
-                            }
-                            .contextMenu {
-                                Button {
-                                    beginEditFolder(entry.folder)
-                                } label: {
-                                    Label("Modifica cartella", systemImage: "pencil")
-                                }
-
-                                let sel = ShareSelection.forFolder(entry.folder.id)
-                                if let pkgUrl = try? SharePackage.writePackageToTempFile(selection: sel) {
-                                    ShareLink(item: pkgUrl) {
-                                        Label("Condividi cartella (.paperclip)", systemImage: "shippingbox.fill")
-                                    }
-                                }
-                                if let htmlUrl = try? SharePackage.writeHtmlToTempFile(selection: sel) {
-                                    ShareLink(item: htmlUrl) {
-                                        Label("Condividi cartella (.html)", systemImage: "globe")
-                                    }
-                                }
-
-                                Button {
-                                    importTargetFolderId = entry.folder.id
-                                    showingPackageImporter = true
-                                } label: {
-                                    Label("Importa .paperclip qui…", systemImage: "square.and.arrow.down")
-                                }
-
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    viewModel.deleteFolder(entry.folder)
-                                } label: {
-                                    Label("Elimina cartella", systemImage: "trash")
-                                }
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    viewModel.deleteFolder(entry.folder)
-                                } label: {
-                                    Label("Elimina", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text("Cartelle e Sottocartelle")
-                        Spacer()
-                        Button {
-                            importTargetFolderId = nil
-                            showingPackageImporter = true
-                        } label: {
-                            Label("Importa .paperclip", systemImage: "shippingbox")
-                                .font(.caption.bold())
-                        }
-                        .padding(.trailing, 8)
-
-                        Button {
-                            beginNewFolder()
-                        } label: {
-                            Label("Nuova", systemImage: "folder.badge.plus")
-                                .font(.caption.bold())
-                        }
-                    }
-                } footer: {
-                    Text("Tieni premuto su una cartella per condividerla come pacchetto .paperclip o pagina .html. Eliminando una cartella, le sue sottocartelle e i suoi elementi salgono al livello superiore.")
-                }
-
-                Section {
-                    if viewModel.tags.isEmpty {
-                        Text("Nessun tag creato.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(viewModel.tags) { tag in
-                            HStack(spacing: 10) {
-                                Circle()
-                                    .fill(Color(hexString: tag.colorHex))
-                                    .frame(width: 12, height: 12)
-                                Text("#\(tag.name)")
-                                    .font(.body.weight(.medium))
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                beginEditTag(tag)
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    viewModel.deleteTag(tag)
-                                } label: {
-                                    Label("Elimina", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    HStack {
-                        Text("Tag")
-                        Spacer()
-                        Button {
-                            beginNewTag()
-                        } label: {
-                            Label("Nuovo", systemImage: "tag.fill")
-                                .font(.caption.bold())
-                        }
-                    }
-                }
+                foldersSection
+                tagsSection
             }
             .navigationTitle("Cartelle e Tag")
             .sheet(isPresented: $showingFolderDialog) {
@@ -199,15 +64,158 @@ struct FoldersAndTagsView: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    let accessed = url.startAccessingSecurityScopedResource()
-                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-                    if let data = try? Data(contentsOf: url),
-                       let res = try? SharePackage.importPackage(data: data, targetFolderId: importTargetFolderId) {
+                    if let res = try? SharePackage.importPackage(from: url, targetFolderId: importTargetFolderId) {
                         viewModel.reloadAll()
-                        statusBanner = "Importati \(res.itemsImported) elementi (\(res.mediaCopied) media)."
+                        let count = res.result.added + res.result.updated
+                        statusBanner = "Importato \"\(res.title)\" (\(count) elementi)."
                     } else {
                         statusBanner = "File .paperclip non valido."
                     }
+                }
+            }
+        }
+    }
+
+    private var foldersSection: some View {
+        Section {
+            if viewModel.folderTree.entries.isEmpty {
+                Text("Nessuna cartella creata.")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(viewModel.folderTree.entries) { entry in
+                    folderRow(entry)
+                }
+            }
+        } header: {
+            HStack {
+                Text("Cartelle e Sottocartelle")
+                Spacer()
+                Button {
+                    importTargetFolderId = nil
+                    showingPackageImporter = true
+                } label: {
+                    Label("Importa .paperclip", systemImage: "shippingbox")
+                        .font(.caption.bold())
+                }
+                .padding(.trailing, 8)
+
+                Button {
+                    beginNewFolder()
+                } label: {
+                    Label("Nuova", systemImage: "folder.badge.plus")
+                        .font(.caption.bold())
+                }
+            }
+        } footer: {
+            Text("Tieni premuto su una cartella per condividerla come pacchetto .paperclip o pagina .html. Eliminando una cartella, le sue sottocartelle e i suoi elementi salgono al livello superiore.")
+        }
+    }
+
+    private func folderRow(_ entry: FolderTree.Entry) -> some View {
+        HStack(spacing: 10) {
+            if entry.depth > 0 {
+                Spacer()
+                    .frame(width: CGFloat(entry.depth) * 18)
+            }
+            Circle()
+                .fill(Color(hexString: entry.folder.colorHex))
+                .frame(width: 12, height: 12)
+            Image(systemName: "folder.fill")
+                .foregroundColor(Color(hexString: entry.folder.colorHex))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.folder.name)
+                    .font(.body.weight(.medium))
+                if entry.depth > 0 {
+                    Text(viewModel.folderTree.pathLabel(entry.folder.id))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            beginEditFolder(entry.folder)
+        }
+        .contextMenu {
+            Button {
+                beginEditFolder(entry.folder)
+            } label: {
+                Label("Modifica cartella", systemImage: "pencil")
+            }
+
+            if let pkgUrl = SharePackage.writeFolderPackage(folder: entry.folder) {
+                ShareLink(item: pkgUrl) {
+                    Label("Condividi cartella (.paperclip)", systemImage: "shippingbox.fill")
+                }
+            }
+            if let htmlUrl = SharePackage.writeFolderHtml(folder: entry.folder) {
+                ShareLink(item: htmlUrl) {
+                    Label("Condividi cartella (.html)", systemImage: "globe")
+                }
+            }
+
+            Button {
+                importTargetFolderId = entry.folder.id
+                showingPackageImporter = true
+            } label: {
+                Label("Importa .paperclip qui…", systemImage: "square.and.arrow.down")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                viewModel.deleteFolder(entry.folder)
+            } label: {
+                Label("Elimina cartella", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                viewModel.deleteFolder(entry.folder)
+            } label: {
+                Label("Elimina", systemImage: "trash")
+            }
+        }
+    }
+
+    private var tagsSection: some View {
+        Section {
+            if viewModel.tags.isEmpty {
+                Text("Nessun tag creato.")
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(viewModel.tags) { tag in
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(Color(hexString: tag.colorHex))
+                            .frame(width: 12, height: 12)
+                        Text("#\(tag.name)")
+                            .font(.body.weight(.medium))
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        beginEditTag(tag)
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            viewModel.deleteTag(tag)
+                        } label: {
+                            Label("Elimina", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        } header: {
+            HStack {
+                Text("Tag")
+                Spacer()
+                Button {
+                    beginNewTag()
+                } label: {
+                    Label("Nuovo", systemImage: "tag.fill")
+                        .font(.caption.bold())
                 }
             }
         }
