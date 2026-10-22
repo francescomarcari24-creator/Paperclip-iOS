@@ -584,13 +584,17 @@ struct HighlightsHubSheet: View {
     }
 }
 
-/// Selettore a due posizioni (Filtri / Nascondi) in stile barra inferiore: il cursore segue il dito,
-/// si può trascinare o toccare, e al rilascio scatta sulla posizione più vicina.
+/// Selettore a due posizioni (Filtri / Nascondi) che si comporta come la barra inferiore di iOS 26:
+/// a riposo il cursore è una pillola colorata; alla pressione diventa una lente di vetro trasparente
+/// più grande della barra, segue il dito allungandosi con la velocità, ingrandisce l'etichetta
+/// sottostante e al rilascio scatta con rimbalzo sulla posizione più vicina.
 struct ThinSwitch: View {
     @Binding var isOn: Bool
     let accessibilityLabel: String
     @Environment(\.paperclipPalette) private var palette
     @State private var dragX: CGFloat? = nil
+    /// Allungamento orizzontale della lente (0 = fermo), calcolato dalla velocità del trascinamento.
+    @State private var stretch: CGFloat = 0
 
     private let segmentWidth: CGFloat = 80
     private let height: CGFloat = 36
@@ -599,40 +603,48 @@ struct ThinSwitch: View {
     private var thumbWidth: CGFloat { segmentWidth - inset * 2 }
     private var restingX: CGFloat { isOn ? inset : segmentWidth + inset }
     private var thumbX: CGFloat { dragX ?? restingX }
+    private var isPressed: Bool { dragX != nil }
     /// Il cursore è sopra "Filtri" se il suo centro sta nella metà sinistra.
     private var thumbOnLeft: Bool { thumbX + thumbWidth / 2 < segmentWidth }
 
     var body: some View {
         ZStack(alignment: .leading) {
-            Capsule()
-                .fill(palette.primary.opacity(0.22))
-                .overlay(Capsule().strokeBorder(palette.primary.opacity(0.35), lineWidth: 1))
-                .frame(width: thumbWidth, height: height - inset * 2)
-                .offset(x: thumbX)
-
             HStack(spacing: 0) {
                 label("Filtri", highlighted: thumbOnLeft)
                 label("Nascondi", highlighted: !thumbOnLeft)
             }
+
+            Capsule()
+                .fill(palette.primary.opacity(isPressed ? 0 : 0.22))
+                .frame(width: thumbWidth, height: height - inset * 2)
+                .modifier(GlassLens(isPressed: isPressed))
+                .scaleEffect(x: (isPressed ? 1.18 : 1) * (1 + stretch),
+                             y: (isPressed ? 1.32 : 1) * (1 - stretch * 0.5))
+                .offset(x: thumbX)
+                .allowsHitTesting(false)
         }
         .frame(width: segmentWidth * 2, height: height)
-        .background(Capsule().fill(palette.surfaceVariant.opacity(0.6)))
-        .modifier(GlassCapsule())
+        .modifier(GlassBar(fallback: palette.surfaceVariant.opacity(0.6)))
         .contentShape(Capsule())
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
-                    let x = value.location.x - thumbWidth / 2
-                    dragX = min(max(x, inset), segmentWidth + inset)
+                    let x = min(max(value.location.x - thumbWidth / 2, inset), segmentWidth + inset)
+                    let velocity = value.predictedEndLocation.x - value.location.x
+                    withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.7)) {
+                        dragX = x
+                        stretch = min(abs(velocity) / 900, 0.18)
+                    }
                 }
                 .onEnded { _ in
                     let onLeft = thumbOnLeft
                     if onLeft != isOn {
                         UISelectionFeedbackGenerator().selectionChanged()
                     }
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.62)) {
                         isOn = onLeft
                         dragX = nil
+                        stretch = 0
                     }
                 }
         )
@@ -649,17 +661,33 @@ struct ThinSwitch: View {
             .foregroundColor(highlighted ? palette.primary : palette.onSurfaceVariant)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
+            .scaleEffect(isPressed && highlighted ? 1.12 : 1)
             .frame(width: segmentWidth, height: height)
     }
 }
 
-/// Su iOS 26 il selettore prende il materiale Liquid Glass; prima resta il fondo pieno.
-private struct GlassCapsule: ViewModifier {
+/// Fondo del selettore: su iOS 26 solo vetro Liquid Glass come la barra inferiore; prima un fondo pieno.
+private struct GlassBar: ViewModifier {
+    let fallback: Color
+
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular.interactive(), in: Capsule())
+            content.glassEffect(.regular, in: Capsule())
         } else {
-            content
+            content.background(Capsule().fill(fallback))
+        }
+    }
+}
+
+/// Cursore del selettore: alla pressione diventa una lente di vetro trasparente come quella della barra inferiore.
+private struct GlassLens: ViewModifier {
+    let isPressed: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(isPressed ? .clear.interactive() : .identity, in: Capsule())
+        } else {
+            content.background(Capsule().fill(.ultraThinMaterial).opacity(isPressed ? 1 : 0))
         }
     }
 }
