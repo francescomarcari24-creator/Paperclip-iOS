@@ -592,16 +592,55 @@ struct HighlightsHubSheet: View {
 
 /// Selettore Filtri / Nascondi. È il controllo segmentato di sistema, così su iOS 26 ha lo stesso
 /// Liquid Glass della barra inferiore (lente trascinabile, rimbalzo e vibrazione) senza imitazioni.
+/// Come nella barra inferiore, la voce selezionata prende il colore di accento dell'app.
 struct FilterVisibilityPicker: View {
     @Binding var isOn: Bool
+    @Environment(\.paperclipPalette) private var palette
 
     var body: some View {
-        Picker("Mostra filtri", selection: $isOn) {
-            Text("Filtri").tag(true)
-            Text("Nascondi").tag(false)
-        }
-        .pickerStyle(.segmented)
+        SegmentedControl(
+            titles: ["Filtri", "Nascondi"],
+            selectedIndex: Binding(
+                get: { isOn ? 0 : 1 },
+                set: { isOn = $0 == 0 }
+            ),
+            selectedColor: UIColor(palette.primary)
+        )
         .fixedSize()
+        .accessibilityLabel("Mostra filtri")
+    }
+}
+
+private struct SegmentedControl: UIViewRepresentable {
+    let titles: [String]
+    @Binding var selectedIndex: Int
+    let selectedColor: UIColor
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: titles)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged)
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        if control.selectedSegmentIndex != selectedIndex {
+            control.selectedSegmentIndex = selectedIndex
+        }
+        control.setTitleTextAttributes([.foregroundColor: selectedColor], for: .selected)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject {
+        var parent: SegmentedControl
+
+        init(parent: SegmentedControl) { self.parent = parent }
+
+        @objc func valueChanged(_ control: UISegmentedControl) {
+            parent.selectedIndex = control.selectedSegmentIndex
+        }
     }
 }
 
