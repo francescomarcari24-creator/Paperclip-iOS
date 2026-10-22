@@ -204,6 +204,31 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
         self.browser = netBrowser
     }
 
+    // MARK: - Avvio automatico e ciclo di vita dell'app
+
+    private var resumeOnActive = false
+
+    /// Avvia il P2P se c'è almeno un dispositivo associato o una cartella condivisa.
+    func startIfPaired() {
+        guard !isServerRunning, !trustedDevices.devices.isEmpty || !sharedFolders.shares.isEmpty else { return }
+        startP2P()
+    }
+
+    /// In background iOS sospende l'app e chiude i suoi socket: si ferma il P2P e lo si riapre al ritorno.
+    func pauseForBackground() {
+        resumeOnActive = isServerRunning
+        stopP2P()
+    }
+
+    func resumeAfterBackground() {
+        if resumeOnActive {
+            resumeOnActive = false
+            startP2P()
+        } else {
+            startIfPaired()
+        }
+    }
+
     // MARK: - NetServiceBrowserDelegate & NetServiceDelegate
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
@@ -495,7 +520,21 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
                     Darwin.accept(fd, $0, &clientLen)
                 }
             }
-            if clientFD < 0 { break }
+            if clientFD < 0 {
+                let code = errno
+                if code == EINTR || code == ECONNABORTED { continue }
+                // iOS può chiudere il socket di ascolto (app sospesa, rete cambiata): si riapre il server,
+                // altrimenti resterebbe "attivo" senza più accettare nessuno
+                if isServerRunning && serverSocketFD == fd {
+                    AppLogger.shared.error("P2P", "Server P2P interrotto (errno \(code)): riavvio")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        guard self.isServerRunning, self.serverSocketFD == fd else { return }
+                        self.stopP2P()
+                        self.startP2P()
+                    }
+                }
+                break
+            }
 
             // Un client IPv4 arriva come "::ffff:a.b.c.d": si torna all'indirizzo IPv4
             let rawIp = Self.numericHost(withUnsafeBytes(of: &clientAddr) { Data($0.prefix(Int(clientLen))) }) ?? ""

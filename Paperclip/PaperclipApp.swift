@@ -40,13 +40,20 @@ struct PaperclipApp: App {
                     importedPackageBanner = "Importato \"\(res.title)\" (\(count) elementi)."
                 }
             }
+            .onAppear {
+                // Con un dispositivo associato il P2P parte subito: serve alla sincronizzazione automatica
+                P2PSyncManager.shared.onArchiveUpdated = { viewModel.reloadAll() }
+                P2PSyncManager.shared.startIfPaired()
+            }
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
                 case .active:
                     viewModel.purgeExpiredTrash()
+                    P2PSyncManager.shared.resumeAfterBackground()
                 case .background:
                     viewModel.lockPrivateItems()
                     appLock.lockIfNeededOnBackground()
+                    P2PSyncManager.shared.pauseForBackground()
                 case .inactive:
                     break
                 @unknown default:
