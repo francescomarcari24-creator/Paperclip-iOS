@@ -38,6 +38,8 @@ struct P2PSyncView: View {
                 }
                 if !syncManager.isServerRunning {
                     syncManager.startP2P()
+                } else {
+                    syncManager.refreshDiscovery()
                 }
             }
             .alert(

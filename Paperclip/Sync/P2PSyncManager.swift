@@ -44,6 +44,8 @@ struct SharedFolderPayload: Codable {
     let items: [ArchiveItem]
     let crossRefs: [ItemTagCrossRef]
     let contents: [ItemContent]?
+    /// Elementi eliminati definitivamente; nil da un dispositivo con una versione precedente.
+    var deletedItems: [DeletedItem]? = nil
 }
 
 struct SyncPayload: Codable {
@@ -54,6 +56,8 @@ struct SyncPayload: Codable {
     let items: [ArchiveItem]
     let crossRefs: [ItemTagCrossRef]
     let contents: [ItemContent]?
+    /// Elementi eliminati definitivamente; nil da un dispositivo con una versione precedente.
+    var deletedItems: [DeletedItem]? = nil
 }
 
 final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
@@ -87,6 +91,7 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
     private var netService: NetService?
     private var browser: NetServiceBrowser?
     private var resolvingServices: [NetService] = []
+    private var resolveAttempts: [String: Int] = [:]
     private let database = PaperclipDatabase.shared
     private let trustedDevices = TrustedDevices.shared
     private let sharedFolders = SharedFolders.shared
@@ -115,7 +120,8 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
         guard !isServerRunning else { return }
         localIpAddress = Self.findLocalWiFiAddress()
 
-        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        // Dual-stack: accetta connessioni IPv4 e IPv6, a seconda dell'indirizzo con cui l'altro ci ha trovati
+        let fd = Darwin.socket(AF_INET6, SOCK_STREAM, 0)
         guard fd >= 0 else {
             updateStatus("Impossibile creare il socket P2P")
             return
@@ -123,16 +129,18 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
 
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var v6Only: Int32 = 0
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6Only, socklen_t(MemoryLayout<Int32>.size))
 
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(0).bigEndian
-        addr.sin_addr.s_addr = INADDR_ANY.bigEndian
+        var addr = sockaddr_in6()
+        addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        addr.sin6_family = sa_family_t(AF_INET6)
+        addr.sin6_port = in_port_t(0).bigEndian
+        addr.sin6_addr = in6addr_any
 
         let bindResult = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
             }
         }
         guard bindResult == 0, Darwin.listen(fd, 16) == 0 else {
@@ -141,14 +149,14 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
             return
         }
 
-        var boundAddr = sockaddr_in()
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var boundAddr = sockaddr_in6()
+        var len = socklen_t(MemoryLayout<sockaddr_in6>.size)
         _ = withUnsafeMutablePointer(to: &boundAddr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 getsockname(fd, $0, &len)
             }
         }
-        localPort = Int(UInt16(bigEndian: boundAddr.sin_port))
+        localPort = Int(UInt16(bigEndian: boundAddr.sin6_port))
         serverSocketFD = fd
         isServerRunning = true
         updateStatus("In ascolto sulla rete Wi-Fi locale (porta \(localPort))…")
@@ -200,9 +208,46 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         guard !service.name.contains(deviceId) else { return }
+        AppLogger.shared.info("P2P", "Servizio trovato: \(service.name), risoluzione dell'indirizzo…")
+        resolvingServices.removeAll { $0.name == service.name }
         resolvingServices.append(service)
+        resolveAttempts[service.name] = 0
         service.delegate = self
-        service.resolve(withTimeout: 8.0)
+        service.resolve(withTimeout: 10.0)
+    }
+
+    /// Senza il permesso "Rete locale" (o con il tipo di servizio assente da Info.plist) la ricerca non parte.
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
+        let code = errorDict[NetService.errorCode]?.intValue ?? 0
+        AppLogger.shared.error("P2P", "Ricerca Bonjour non avviata (errore \(code))")
+        updateStatus(code == -72008
+            ? "Accesso alla rete locale negato: attivalo in Impostazioni > Paperclip > Rete locale"
+            : "Ricerca dei dispositivi non riuscita (errore \(code))")
+    }
+
+    /// Un dispositivo appena comparso a volte non risponde alla prima risoluzione: si riprova qualche volta.
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        let attempts = (resolveAttempts[sender.name] ?? 0) + 1
+        resolveAttempts[sender.name] = attempts
+        AppLogger.shared.error("P2P", "Risoluzione di \(sender.name) non riuscita (tentativo \(attempts)): \(errorDict)")
+        guard attempts < 4, isServerRunning else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            guard self.isServerRunning, self.resolvingServices.contains(where: { $0 === sender }) else { return }
+            sender.resolve(withTimeout: 10.0)
+        }
+    }
+
+    /// Riavvia la ricerca: chi è comparso mentre il permesso non c'era ancora, o è andato perso, viene ritrovato.
+    func refreshDiscovery() {
+        guard isServerRunning else { return }
+        browser?.stop()
+        resolvingServices.forEach { $0.stop() }
+        resolvingServices.removeAll()
+        resolveAttempts.removeAll()
+        let netBrowser = NetServiceBrowser()
+        netBrowser.delegate = self
+        netBrowser.searchForServices(ofType: Self.serviceType, inDomain: "local.")
+        browser = netBrowser
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
@@ -212,23 +257,14 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let addresses = sender.addresses else { return }
-        var resolvedIp: String? = nil
-        for addrData in addresses {
-            addrData.withUnsafeBytes { ptr in
-                guard let base = ptr.baseAddress else { return }
-                let family = base.assumingMemoryBound(to: sockaddr.self).pointee.sa_family
-                if family == sa_family_t(AF_INET) {
-                    var sin = base.assumingMemoryBound(to: sockaddr_in.self).pointee
-                    var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                    inet_ntop(AF_INET, &sin.sin_addr, &buffer, socklen_t(INET_ADDRSTRLEN))
-                    resolvedIp = String(cString: buffer)
-                }
-            }
-            if resolvedIp != nil { break }
+        guard let addresses = sender.addresses, sender.port > 0 else { return }
+        // IPv4 se c'è; altrimenti IPv6 (alcune versioni di Android annunciano solo quello)
+        let numeric = addresses.compactMap(Self.numericHost)
+        guard let ip = numeric.first(where: { !$0.contains(":") }) ?? numeric.first else {
+            AppLogger.shared.error("P2P", "\(sender.name) risolto senza indirizzi utilizzabili")
+            return
         }
-
-        guard let ip = resolvedIp, ip != localIpAddress, sender.port > 0 else { return }
+        guard ip != localIpAddress else { return }
         let peerDeviceId = sender.name.hasPrefix(Self.servicePrefix)
             ? String(sender.name.dropFirst(Self.servicePrefix.count))
             : sender.name
@@ -433,16 +469,7 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
                     let remote = try JSONDecoder().decode(SharedFolderPayload.self, from: getBody)
                     self.mergeShared(share: share, partner: partner, payload: remote, ip: peer.ip, port: peer.port)
 
-                    let rows = ShareSelection.ofFolder(database: self.database, folderId: share.folderId, includeTrashed: true)
-                    let localPayload = SharedFolderPayload(
-                        rootFolderId: share.folderId,
-                        folders: rows.folders,
-                        tags: rows.tags,
-                        items: rows.items,
-                        crossRefs: rows.crossRefs,
-                        contents: rows.contents
-                    )
-                    let postBody = try JSONEncoder().encode(localPayload)
+                    let postBody = try JSONEncoder().encode(self.sharedPayload(share))
                     let postHeaders = self.signedHeaders(secret: partner.secret, method: "POST", path: path)
                     _ = try self.exchange(ip: peer.ip, port: peer.port, requestLine: "POST \(path)", body: postBody, headers: postHeaders)
                     DispatchQueue.main.async {
@@ -461,8 +488,8 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
 
     private func acceptLoop(fd: Int32) {
         while isServerRunning && serverSocketFD == fd {
-            var clientAddr = sockaddr_in()
-            var clientLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            var clientAddr = sockaddr_storage()
+            var clientLen = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let clientFD = withUnsafeMutablePointer(to: &clientAddr) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     Darwin.accept(fd, $0, &clientLen)
@@ -470,9 +497,9 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
             }
             if clientFD < 0 { break }
 
-            var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            inet_ntop(AF_INET, &clientAddr.sin_addr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
-            let peerIp = String(cString: ipBuffer)
+            // Un client IPv4 arriva come "::ffff:a.b.c.d": si torna all'indirizzo IPv4
+            let rawIp = Self.numericHost(withUnsafeBytes(of: &clientAddr) { Data($0.prefix(Int(clientLen))) }) ?? ""
+            let peerIp = rawIp.hasPrefix("::ffff:") && rawIp.contains(".") ? String(rawIp.dropFirst("::ffff:".count)) : rawIp
 
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 self?.handleClient(fd: clientFD, peerIp: peerIp)
@@ -556,16 +583,7 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
                 return
             }
             if method == "GET" {
-                let rows = ShareSelection.ofFolder(database: database, folderId: share.folderId, includeTrashed: true)
-                let payload = SharedFolderPayload(
-                    rootFolderId: share.folderId,
-                    folders: rows.folders,
-                    tags: rows.tags,
-                    items: rows.items,
-                    crossRefs: rows.crossRefs,
-                    contents: rows.contents
-                )
-                let data = (try? JSONEncoder().encode(payload)) ?? Data()
+                let data = (try? JSONEncoder().encode(sharedPayload(share))) ?? Data()
                 Self.writeHttpResponse(fd: fd, status: "HTTP/1.1 200 OK", body: data)
             } else if method == "POST" {
                 let payload = try? JSONDecoder().decode(SharedFolderPayload.self, from: body)
@@ -611,15 +629,33 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
             tags: database.getAllTags(),
             items: database.getAllItems(),
             crossRefs: database.getAllCrossRefs(),
-            contents: database.getAllItemContents()
+            contents: database.getAllItemContents(),
+            deletedItems: DeletedItems.shared.all
         )
     }
 
+    /// La cartella condivisa con le sue sottocartelle, e gli elementi eliminati che stavano lì dentro.
+    private func sharedPayload(_ share: SharedFolders.Share) -> SharedFolderPayload {
+        let rows = ShareSelection.ofFolder(database: database, folderId: share.folderId, includeTrashed: true)
+        let folderIds = Set(rows.folders.map(\.id))
+        return SharedFolderPayload(
+            rootFolderId: share.folderId,
+            folders: rows.folders,
+            tags: rows.tags,
+            items: rows.items,
+            crossRefs: rows.crossRefs,
+            contents: rows.contents,
+            deletedItems: DeletedItems.shared.all.filter { $0.folderId.map(folderIds.contains) ?? false }
+        )
+    }
+
+    /// Prima applica le eliminazioni dell'altro dispositivo, poi unisce i suoi elementi tranne quelli eliminati qui.
     private func mergePayload(_ payload: SyncPayload, ip: String, port: Int, secret: String) {
+        PermanentDeletion.applyRemote(payload.deletedItems ?? [], database: database)
         let rows = ArchiveRows(
             folders: payload.folders,
             tags: payload.tags,
-            items: payload.items,
+            items: PermanentDeletion.withoutDeleted(payload.items),
             crossRefs: payload.crossRefs,
             contents: payload.contents
         )
@@ -630,11 +666,14 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
         }
     }
 
+    /// Come [mergePayload], ma le eliminazioni toccano solo gli elementi della cartella condivisa.
     private func mergeShared(share: SharedFolders.Share, partner: SharedFolders.Partner, payload: SharedFolderPayload, ip: String, port: Int) {
+        let sharedItemIds = Set(ShareSelection.ofFolder(database: database, folderId: share.folderId, includeTrashed: true).items.map(\.id))
+        PermanentDeletion.applyRemote(payload.deletedItems ?? [], allowedItemIds: sharedItemIds, database: database)
         let rows = ArchiveRows(
             folders: payload.folders,
             tags: payload.tags,
-            items: payload.items,
+            items: PermanentDeletion.withoutDeleted(payload.items),
             crossRefs: payload.crossRefs,
             contents: payload.contents
         )
@@ -697,7 +736,17 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
     }
 
     private func exchange(ip: String, port: Int, requestLine: String, body: Data, headers: [String: String]) throws -> (HttpHead, Data) {
-        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        // Indirizzo numerico IPv4 o IPv6 (anche con la zona, "fe80::1%en0")
+        var hints = addrinfo()
+        hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV
+        hints.ai_socktype = SOCK_STREAM
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(ip, String(port), &hints, &info) == 0, let target = info else {
+            throw NSError(domain: "P2P", code: -1, userInfo: [NSLocalizedDescriptionKey: "Indirizzo non valido: \(ip)"])
+        }
+        defer { freeaddrinfo(info) }
+
+        let fd = Darwin.socket(target.pointee.ai_family, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw NSError(domain: "P2P", code: -1, userInfo: [NSLocalizedDescriptionKey: "Socket non disponibile"])
         }
@@ -707,17 +756,7 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = UInt16(port).bigEndian
-        inet_pton(AF_INET, ip, &addr.sin_addr)
-
-        let connResult = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
+        let connResult = Darwin.connect(fd, target.pointee.ai_addr, target.pointee.ai_addrlen)
         guard connResult == 0 else {
             throw NSError(domain: "P2P", code: Int(errno), userInfo: [NSLocalizedDescriptionKey: "Impossibile connettersi a \(ip):\(port)"])
         }
@@ -810,6 +849,18 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
     private func updateStatus(_ text: String) {
         DispatchQueue.main.async {
             self.statusMessage = text
+        }
+    }
+
+    /// L'indirizzo numerico di un sockaddr IPv4 o IPv6, con la zona per gli IPv6 link-local.
+    private static func numericHost(_ data: Data) -> String? {
+        data.withUnsafeBytes { ptr -> String? in
+            guard let sa = ptr.baseAddress?.assumingMemoryBound(to: sockaddr.self) else { return nil }
+            let family = Int32(sa.pointee.sa_family)
+            guard family == AF_INET || family == AF_INET6 else { return nil }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(sa, socklen_t(data.count), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+            return String(cString: host)
         }
     }
 

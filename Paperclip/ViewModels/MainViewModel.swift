@@ -343,17 +343,11 @@ final class MainViewModel: ObservableObject {
         archiveChangedLocally()
     }
 
+    /// Elimina per sempre e lo ricorda, perché la sincronizzazione lo elimini anche sugli altri dispositivi.
     func deleteForever(_ items: [ArchiveItem]) {
-        database.inTransaction {
-            for item in items {
-                database.deleteItemPermanently(item.id)
-                cancelReminder(itemId: item.id)
-                LinkChecker.clearForItem(item.id)
-                if ItemType.mediaTypes.contains(item.itemType) {
-                    fileStorage.deleteFile(item.contentUrl)
-                }
-            }
-        }
+        PermanentDeletion.delete(items, database: database)
+        let now = ArchiveItem.nowMillis()
+        DeletedItems.shared.record(items.map { DeletedItem(item: $0, deletedAt: now) })
         reloadAll()
         archiveChangedLocally()
     }

@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import UIKit
+import UserNotifications
 
 // MARK: - ArchiveRows & ArchiveMerger
 
@@ -34,6 +35,163 @@ struct ArchiveRows: Codable {
     }
 }
 
+// MARK: - ItemMatcher & DeletedItems
+
+/// Ciò che identifica un elemento fra archivi diversi, dove gli id sono locali.
+struct ItemIdentity: Hashable {
+    let title: String
+    let createdAt: Int64
+    let itemType: ItemType
+
+    var key: String { "\(title)|\(createdAt)" }
+    var instant: String { "\(createdAt)|\(itemType.rawValue)" }
+}
+
+protocol ItemIdentifiable {
+    var identity: ItemIdentity { get }
+}
+
+extension ArchiveItem: ItemIdentifiable {
+    var identity: ItemIdentity { ItemIdentity(title: title, createdAt: createdAt, itemType: itemType) }
+}
+
+/**
+ * Trova fra [local] lo stesso elemento di uno di [remote]: per titolo e data di creazione, oppure,
+ * se il titolo è stato cambiato, per data di creazione e tipo, purché indichino un solo elemento da
+ * entrambe le parti (un'importazione può dare lo stesso istante a più elementi: allora nessuna
+ * corrispondenza, meglio un doppione che unire elementi diversi).
+ */
+struct ItemMatcher<Local: ItemIdentifiable> {
+    private let byKey: [String: Local]
+    private let unclaimedByInstant: [String: [Local]]
+    private let remoteCountByInstant: [String: Int]
+
+    init(local: [Local], remote: [ItemIdentity]) {
+        var byKey: [String: Local] = [:]
+        for element in local { byKey[element.identity.key] = element }
+        let remoteKeys = Set(remote.map(\.key))
+        self.byKey = byKey
+        self.unclaimedByInstant = Dictionary(grouping: local.filter { !remoteKeys.contains($0.identity.key) }, by: { $0.identity.instant })
+        self.remoteCountByInstant = remote.reduce(into: [:]) { $0[$1.instant, default: 0] += 1 }
+    }
+
+    func match(_ remote: ItemIdentity) -> Local? {
+        if let exact = byKey[remote.key] { return exact }
+        guard remoteCountByInstant[remote.instant] == 1,
+              let candidates = unclaimedByInstant[remote.instant], candidates.count == 1 else { return nil }
+        return candidates[0]
+    }
+}
+
+/// Un elemento eliminato definitivamente: viaggia con la sincronizzazione perché gli altri dispositivi
+/// lo eliminino a loro volta invece di rimandarlo indietro.
+struct DeletedItem: Codable, Equatable, ItemIdentifiable {
+    var title: String
+    var createdAt: Int64
+    var itemType: ItemType
+    var deletedAt: Int64
+    /// Cartella dell'elemento sul dispositivo che lo ha eliminato: decide a quali cartelle condivise mandarlo.
+    var folderId: Int64? = nil
+
+    var identity: ItemIdentity { ItemIdentity(title: title, createdAt: createdAt, itemType: itemType) }
+
+    init(item: ArchiveItem, deletedAt: Int64) {
+        self.title = item.title
+        self.createdAt = item.createdAt
+        self.itemType = item.itemType
+        self.deletedAt = deletedAt
+        self.folderId = item.folderId
+    }
+}
+
+/// Gli elementi eliminati definitivamente negli ultimi [keepDays] giorni.
+final class DeletedItems {
+    static let shared = DeletedItems()
+    static let keepDays: Int64 = 180
+
+    private let key = "paperclip_deleted_items"
+    private let lock = NSLock()
+
+    var all: [DeletedItem] {
+        lock.lock()
+        defer { lock.unlock() }
+        return load()
+    }
+
+    func record(_ deleted: [DeletedItem]) {
+        guard !deleted.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        var byKey: [String: DeletedItem] = [:]
+        for entry in load() + deleted {
+            if let existing = byKey[entry.identity.key], existing.deletedAt >= entry.deletedAt { continue }
+            byKey[entry.identity.key] = entry
+        }
+        let cutoff = ArchiveItem.nowMillis() - Self.keepDays * 24 * 60 * 60 * 1000
+        let kept = byKey.values.filter { $0.deletedAt >= cutoff }.sorted { $0.deletedAt < $1.deletedAt }
+        if let data = try? JSONEncoder().encode(kept) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    private func load() -> [DeletedItem] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([DeletedItem].self, from: data) else { return [] }
+        return decoded
+    }
+}
+
+/// Eliminazione definitiva di elementi con i loro file, promemoria e controlli dei link.
+enum PermanentDeletion {
+    static func delete(_ items: [ArchiveItem], database: PaperclipDatabase = .shared) {
+        guard !items.isEmpty else { return }
+        database.inTransaction {
+            for item in items {
+                database.deleteItemPermanently(item.id)
+            }
+        }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: items.map { "paperclip_reminder_\($0.id)" })
+        for item in items {
+            LinkChecker.clearForItem(item.id)
+            if ItemType.mediaTypes.contains(item.itemType) {
+                FileStorageManager.shared.deleteFile(item.contentUrl)
+            }
+        }
+    }
+
+    /**
+     * Applica le eliminazioni arrivate da un altro dispositivo: elimina gli elementi corrispondenti non
+     * modificati dopo l'eliminazione (solo quelli fra [allowedItemIds], se indicati) e le ricorda per
+     * propagarle. Restituisce quanti elementi ha eliminato.
+     */
+    @discardableResult
+    static func applyRemote(_ deleted: [DeletedItem], allowedItemIds: Set<Int64>? = nil, database: PaperclipDatabase = .shared) -> Int {
+        guard !deleted.isEmpty else { return 0 }
+        let candidates = database.getAllItems().filter { allowedItemIds?.contains($0.id) ?? true }
+        let matcher = ItemMatcher(local: candidates, remote: deleted.map(\.identity))
+        var toDelete: [Int64: ArchiveItem] = [:]
+        for entry in deleted {
+            if let item = matcher.match(entry.identity), item.updatedAt <= entry.deletedAt {
+                toDelete[item.id] = item
+            }
+        }
+        delete(Array(toDelete.values), database: database)
+        DeletedItems.shared.record(deleted)
+        return toDelete.count
+    }
+
+    /// [items] senza quelli eliminati qui dopo la loro ultima modifica: non devono tornare.
+    static func withoutDeleted(_ items: [ArchiveItem]) -> [ArchiveItem] {
+        let deleted = DeletedItems.shared.all
+        guard !deleted.isEmpty else { return items }
+        let matcher = ItemMatcher(local: deleted, remote: items.map(\.identity))
+        return items.filter { item in
+            guard let entry = matcher.match(item.identity) else { return true }
+            return item.updatedAt > entry.deletedAt
+        }
+    }
+}
+
 final class ArchiveMerger {
     enum FolderPlacement {
         case byPath
@@ -56,15 +214,10 @@ final class ArchiveMerger {
         placement: FolderPlacement,
         localizeMedia: (String?) -> String?
     ) -> Result {
-        let existingItems = database.getAllItems()
-        var localByKey: [String: ArchiveItem] = [:]
-        for item in existingItems {
-            localByKey["\(item.title)|\(item.createdAt)"] = item
-        }
+        let matcher = ItemMatcher(local: database.getAllItems(), remote: rows.items.map(\.identity))
 
         let itemsToApply: [ArchiveItem] = rows.items.compactMap { remote in
-            let key = "\(remote.title)|\(remote.createdAt)"
-            if let local = localByKey[key], remote.updatedAt <= local.updatedAt {
+            if let local = matcher.match(remote.identity), remote.updatedAt <= local.updatedAt {
                 return nil
             }
             var copy = remote
@@ -104,8 +257,7 @@ final class ArchiveMerger {
             }
 
             for remote in itemsToApply {
-                let key = "\(remote.title)|\(remote.createdAt)"
-                let local = localByKey[key]
+                let local = matcher.match(remote.identity)
                 var merged = remote
                 merged.id = local?.id ?? 0
                 merged.folderId = remote.folderId.flatMap { folderIdMap[$0] }
