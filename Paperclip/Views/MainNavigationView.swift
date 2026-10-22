@@ -201,6 +201,16 @@ struct MainNavigationView: View {
                     .padding(.bottom, 96)
                 }
                 .searchable(text: $viewModel.searchQuery, prompt: "Cerca nel testo, OCR, PDF, trascrizioni…")
+                // Trascinando verso il basso: come il tasto di sincronizzazione, o solo un ricaricamento senza dispositivi associati
+                .refreshable {
+                    if trustedDevices.devices.isEmpty {
+                        viewModel.reloadAll()
+                    } else if !isManualSyncing {
+                        await withCheckedContinuation { continuation in
+                            syncNow { continuation.resume() }
+                        }
+                    }
+                }
 
                 Menu {
                     Button {
@@ -310,10 +320,12 @@ struct MainNavigationView: View {
 
     // MARK: - Manual Sync
 
-    private func syncNow() {
+    /// [onFinished]: quando la sincronizzazione è finita (il trascinamento verso il basso aspetta quello).
+    private func syncNow(onFinished: @escaping () -> Void = {}) {
         isManualSyncing = true
         P2PSyncManager.shared.syncNow { message in
             isManualSyncing = false
+            onFinished()
             viewModel.reloadAll()
             withAnimation { syncMessage = message }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
