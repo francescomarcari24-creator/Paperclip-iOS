@@ -272,22 +272,28 @@ struct MainNavigationView: View {
                         }
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    ThinSwitch(
-                        isOn: Binding(
-                            get: { preferences.showFeedFilters },
-                            set: { newValue in
-                                withAnimation { preferences.showFeedFilters = newValue }
-                            }
-                        ),
-                        accessibilityLabel: "Mostra filtri"
-                    )
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarTrailing) { filterVisibilityPicker }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) { filterVisibilityPicker }
                 }
             }
         }
     }
 
     // MARK: - Filter Bar
+
+    private var filterVisibilityPicker: some View {
+        FilterVisibilityPicker(
+            isOn: Binding(
+                get: { preferences.showFeedFilters },
+                set: { newValue in
+                    withAnimation { preferences.showFeedFilters = newValue }
+                }
+            )
+        )
+    }
 
     /// Stesso ordine dei filtri per tipo di Android.
     private static let typeFilterOrder: [ItemType] = [
@@ -584,111 +590,18 @@ struct HighlightsHubSheet: View {
     }
 }
 
-/// Selettore a due posizioni (Filtri / Nascondi) che si comporta come la barra inferiore di iOS 26:
-/// a riposo il cursore è una pillola colorata; alla pressione diventa una lente di vetro trasparente
-/// più grande della barra, segue il dito allungandosi con la velocità, ingrandisce l'etichetta
-/// sottostante e al rilascio scatta con rimbalzo sulla posizione più vicina.
-struct ThinSwitch: View {
+/// Selettore Filtri / Nascondi. È il controllo segmentato di sistema, così su iOS 26 ha lo stesso
+/// Liquid Glass della barra inferiore (lente trascinabile, rimbalzo e vibrazione) senza imitazioni.
+struct FilterVisibilityPicker: View {
     @Binding var isOn: Bool
-    let accessibilityLabel: String
-    @Environment(\.paperclipPalette) private var palette
-    @State private var dragX: CGFloat? = nil
-    /// Allungamento orizzontale della lente (0 = fermo), calcolato dalla velocità del trascinamento.
-    @State private var stretch: CGFloat = 0
-
-    private let segmentWidth: CGFloat = 80
-    private let height: CGFloat = 36
-    private let inset: CGFloat = 3
-
-    private var thumbWidth: CGFloat { segmentWidth - inset * 2 }
-    private var restingX: CGFloat { isOn ? inset : segmentWidth + inset }
-    private var thumbX: CGFloat { dragX ?? restingX }
-    private var isPressed: Bool { dragX != nil }
-    /// Il cursore è sopra "Filtri" se il suo centro sta nella metà sinistra.
-    private var thumbOnLeft: Bool { thumbX + thumbWidth / 2 < segmentWidth }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            HStack(spacing: 0) {
-                label("Filtri", highlighted: thumbOnLeft)
-                label("Nascondi", highlighted: !thumbOnLeft)
-            }
-
-            Capsule()
-                .fill(palette.primary.opacity(isPressed ? 0 : 0.22))
-                .frame(width: thumbWidth, height: height - inset * 2)
-                .modifier(GlassLens(isPressed: isPressed))
-                .scaleEffect(x: (isPressed ? 1.18 : 1) * (1 + stretch),
-                             y: (isPressed ? 1.32 : 1) * (1 - stretch * 0.5))
-                .offset(x: thumbX)
-                .allowsHitTesting(false)
+        Picker("Mostra filtri", selection: $isOn) {
+            Text("Filtri").tag(true)
+            Text("Nascondi").tag(false)
         }
-        .frame(width: segmentWidth * 2, height: height)
-        .modifier(GlassBar(fallback: palette.surfaceVariant.opacity(0.6)))
-        .contentShape(Capsule())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    let x = min(max(value.location.x - thumbWidth / 2, inset), segmentWidth + inset)
-                    let velocity = value.predictedEndLocation.x - value.location.x
-                    withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.7)) {
-                        dragX = x
-                        stretch = min(abs(velocity) / 900, 0.18)
-                    }
-                }
-                .onEnded { _ in
-                    let onLeft = thumbOnLeft
-                    if onLeft != isOn {
-                        UISelectionFeedbackGenerator().selectionChanged()
-                    }
-                    withAnimation(.spring(response: 0.38, dampingFraction: 0.62)) {
-                        isOn = onLeft
-                        dragX = nil
-                        stretch = 0
-                    }
-                }
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(isOn ? "Filtri visibili" : "Filtri nascosti")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { isOn.toggle() }
-    }
-
-    private func label(_ title: String, highlighted: Bool) -> some View {
-        Text(title)
-            .font(.subheadline.weight(highlighted ? .semibold : .regular))
-            .foregroundColor(highlighted ? palette.primary : palette.onSurfaceVariant)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .scaleEffect(isPressed && highlighted ? 1.12 : 1)
-            .frame(width: segmentWidth, height: height)
-    }
-}
-
-/// Fondo del selettore: su iOS 26 solo vetro Liquid Glass come la barra inferiore; prima un fondo pieno.
-private struct GlassBar: ViewModifier {
-    let fallback: Color
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: Capsule())
-        } else {
-            content.background(Capsule().fill(fallback))
-        }
-    }
-}
-
-/// Cursore del selettore: alla pressione diventa una lente di vetro trasparente come quella della barra inferiore.
-private struct GlassLens: ViewModifier {
-    let isPressed: Bool
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(isPressed ? .clear.interactive() : .identity, in: Capsule())
-        } else {
-            content.background(Capsule().fill(.ultraThinMaterial).opacity(isPressed ? 1 : 0))
-        }
+        .pickerStyle(.segmented)
+        .fixedSize()
     }
 }
 
