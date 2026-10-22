@@ -22,6 +22,9 @@ struct MainNavigationView: View {
     @State private var showingQuickScanner: Bool = false
     @State private var showingQuickDrawing: Bool = false
     @State private var showingQuickCamera: Bool = false
+    @ObservedObject private var trustedDevices = TrustedDevices.shared
+    @State private var isManualSyncing: Bool = false
+    @State private var syncMessage: String?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -73,6 +76,18 @@ struct MainNavigationView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 64)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let message = syncMessage {
+                Text(message)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color.black.opacity(0.88))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 64)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .sheet(isPresented: $showingAddSheet) {
@@ -258,6 +273,17 @@ struct MainNavigationView: View {
                         }
                         .accessibilityLabel("Sincronizzazione Wi-Fi P2P")
 
+                        // Come su Android: solo con almeno un dispositivo associato, gira mentre sincronizza
+                        if !trustedDevices.devices.isEmpty {
+                            Button {
+                                syncNow()
+                            } label: {
+                                SyncIcon(isSpinning: isManualSyncing)
+                            }
+                            .disabled(isManualSyncing)
+                            .accessibilityLabel(isManualSyncing ? "Sincronizzazione in corso" : "Sincronizza con i tuoi dispositivi")
+                        }
+
                         if viewModel.allItemsWithDetails.contains(where: { $0.item.isPrivate && $0.item.deletedAt == nil }) {
                             Button {
                                 if viewModel.privateUnlocked {
@@ -277,6 +303,22 @@ struct MainNavigationView: View {
                         .sharedBackgroundVisibility(.hidden)
                 } else {
                     ToolbarItem(placement: .topBarTrailing) { filterVisibilityPicker }
+                }
+            }
+        }
+    }
+
+    // MARK: - Manual Sync
+
+    private func syncNow() {
+        isManualSyncing = true
+        P2PSyncManager.shared.syncNow { message in
+            isManualSyncing = false
+            viewModel.reloadAll()
+            withAnimation { syncMessage = message }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                if syncMessage == message {
+                    withAnimation { syncMessage = nil }
                 }
             }
         }
@@ -587,6 +629,24 @@ struct HighlightsHubSheet: View {
                 }
             }
         }
+    }
+}
+
+/// Icona del tasto di sincronizzazione: le frecce girano finché la sincronizzazione è in corso.
+private struct SyncIcon: View {
+    let isSpinning: Bool
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Image(systemName: "arrow.triangle.2.circlepath")
+            .rotationEffect(.degrees(angle))
+            .onChange(of: isSpinning) { spinning in
+                if spinning {
+                    withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { angle = 360 }
+                } else {
+                    withAnimation(.default) { angle = 0 }
+                }
+            }
     }
 }
 

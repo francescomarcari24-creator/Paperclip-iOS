@@ -362,15 +362,23 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
         pendingPairing = nil
     }
 
-    func syncWithPeer(_ peer: PeerDevice) {
+    /// [completion], se c'è, riceve sul main thread se la sincronizzazione è riuscita.
+    func syncWithPeer(_ peer: PeerDevice, completion: ((Bool) -> Void)? = nil) {
         guard let trusted = trustedDevices.byId(peer.deviceId) else {
             updateStatus("Associa prima \(peer.name) per sincronizzare l'intero archivio.")
+            completion?(false)
             return
         }
         syncQueue.async {
             DispatchQueue.main.async { self.isSyncing = true }
             self.updateStatus("Sincronizzazione in corso con \(peer.name)…")
-            defer { DispatchQueue.main.async { self.isSyncing = false } }
+            var succeeded = false
+            defer {
+                DispatchQueue.main.async {
+                    self.isSyncing = false
+                    completion?(succeeded)
+                }
+            }
 
             do {
                 let getHeaders = self.signedHeaders(secret: trusted.secret, method: "GET", path: "/sync")
@@ -399,6 +407,7 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
                     self.statusMessage = "Sincronizzazione completata con successo con \(peer.name)!"
                 }
                 AppLogger.shared.info("P2P", "Sincronizzazione completata con \(peer.name)")
+                succeeded = true
             } catch {
                 self.updateStatus("Errore di sincronizzazione: \(error.localizedDescription)")
                 AppLogger.shared.error("P2P", "Errore sync con \(peer.name): \(error.localizedDescription)")
@@ -455,6 +464,38 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
 
     func declineInvite(_ invite: FolderInvite) {
         incomingInvites.removeAll { $0.shareId == invite.shareId }
+    }
+
+    /**
+     * Sincronizza subito con i dispositivi associati raggiungibili (il tasto nel feed). Se il P2P era
+     * spento lo avvia e lascia qualche secondo alla ricerca. [completion] riceve il messaggio da mostrare.
+     */
+    func syncNow(completion: @escaping (String) -> Void) {
+        let wasRunning = isServerRunning
+        if !wasRunning { startP2P() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (wasRunning ? 0 : 4)) {
+            let peers = self.discoveredPeers.filter { self.trustedDevices.byId($0.deviceId) != nil }
+            guard !peers.isEmpty else {
+                completion("Nessun dispositivo associato raggiungibile: devono essere sulla stessa rete Wi-Fi")
+                return
+            }
+            let group = DispatchGroup()
+            var failed: [String] = []
+            for peer in peers {
+                group.enter()
+                self.syncWithPeer(peer) { ok in
+                    if !ok { failed.append(peer.name) }
+                    group.leave()
+                }
+            }
+            group.notify(queue: .main) {
+                if failed.isEmpty {
+                    completion(peers.count == 1 ? "Sincronizzato con \(peers[0].name)" : "Sincronizzato con \(peers.count) dispositivi")
+                } else {
+                    completion("Sincronizzazione non riuscita con \(failed.joined(separator: ", "))")
+                }
+            }
+        }
     }
 
     /// Chiamato dopo ogni creazione, modifica o eliminazione di un elemento: se almeno un dispositivo
