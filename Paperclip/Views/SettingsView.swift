@@ -25,9 +25,399 @@ struct SettingsView: View {
     @ObservedObject private var preferences = UiPreferences.shared
     @ObservedObject private var logger = AppLogger.shared
     @ObservedObject private var appLock = AppLockManager.shared
+    @ObservedObject private var trustedDevices = TrustedDevices.shared
+
+    @State private var showingP2PSync: Bool = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    NavigationLink {
+                        AppearanceSettingsView()
+                    } label: {
+                        SettingsRowLabel(title: "Aspetto", systemImage: "paintpalette.fill", color: .indigo, value: preferences.themeMode.label)
+                    }
+
+                    NavigationLink {
+                        SecuritySettingsView(viewModel: viewModel)
+                    } label: {
+                        SettingsRowLabel(title: "Sicurezza e privacy", systemImage: "lock.fill", color: .blue, value: appLock.hasPin ? "PIN attivo" : nil)
+                    }
+                }
+
+                Section {
+                    NavigationLink {
+                        ContentSettingsView(viewModel: viewModel, onOpenHighlights: onOpenHighlights)
+                    } label: {
+                        SettingsRowLabel(title: "Feed e contenuti", systemImage: "square.stack.fill", color: .orange)
+                    }
+
+                    NavigationLink {
+                        AutomationSettingsView(viewModel: viewModel)
+                    } label: {
+                        SettingsRowLabel(title: "Automazioni", systemImage: "wand.and.stars", color: .purple)
+                    }
+                }
+
+                Section {
+                    Button {
+                        showingP2PSync = true
+                    } label: {
+                        HStack {
+                            SettingsRowLabel(
+                                title: "Sincronizzazione Wi-Fi",
+                                systemImage: "antenna.radiowaves.left.and.right",
+                                color: .green,
+                                value: trustedDevices.devices.isEmpty ? nil : "\(trustedDevices.devices.count) associati"
+                            )
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+
+                    NavigationLink {
+                        BackupSettingsView(viewModel: viewModel)
+                    } label: {
+                        SettingsRowLabel(title: "Backup e ripristino", systemImage: "externaldrive.fill", color: .teal)
+                    }
+
+                    NavigationLink {
+                        ImportExportSettingsView(viewModel: viewModel)
+                    } label: {
+                        SettingsRowLabel(title: "Importa ed esporta", systemImage: "arrow.up.arrow.down", color: .pink)
+                    }
+                }
+
+                Section {
+                    NavigationLink {
+                        DiagnosticsLogView(logger: logger)
+                    } label: {
+                        SettingsRowLabel(title: "Diagnostica", systemImage: "terminal.fill", color: .gray, value: "\(logger.entries.count)")
+                    }
+                } footer: {
+                    Text("Commit Android di riferimento: 99d8319 • Database SQLite compatibile Room v6")
+                }
+            }
+            .navigationTitle("Impostazioni")
+            .sheet(isPresented: $showingP2PSync) {
+                P2PSyncView()
+                    .environmentObject(viewModel)
+            }
+        }
+    }
+}
+
+// MARK: - Componenti comuni
+
+/// Riga della schermata principale delle impostazioni: icona su quadrato colorato, titolo e valore attuale.
+private struct SettingsRowLabel: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+    var value: String? = nil
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 29, height: 29)
+                .background(color, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text(title)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if let value {
+                Text(value)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+    }
+}
+
+/// Messaggio di esito mostrato in cima a una schermata delle impostazioni.
+private struct SettingsStatusBanner: View {
+    @Binding var message: String?
     @Environment(\.paperclipPalette) private var palette
 
-    // Backup state
+    var body: some View {
+        if let message {
+            Section {
+                HStack {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundColor(palette.primary)
+                    Text(message)
+                        .font(.subheadline)
+                    Spacer()
+                    Button("OK") {
+                        self.message = nil
+                    }
+                    .font(.caption.bold())
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Aspetto
+
+private struct AppearanceSettingsView: View {
+    @ObservedObject private var preferences = UiPreferences.shared
+
+    var body: some View {
+        Form {
+            Section("Tema") {
+                Picker("Modalità tema", selection: $preferences.themeMode) {
+                    ForEach(ThemeMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section("Colore dell'app") {
+                Picker("Colore dell'app", selection: $preferences.accentColor) {
+                    ForEach(AccentColor.allCases) { accent in
+                        HStack {
+                            if let hex = accent.seedHex {
+                                Circle()
+                                    .fill(Color(hex: hex))
+                                    .frame(width: 14, height: 14)
+                            }
+                            Text(accent.label)
+                        }
+                        .tag(accent)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+        }
+        .navigationTitle("Aspetto")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Sicurezza e privacy
+
+private struct SecuritySettingsView: View {
+    @ObservedObject var viewModel: MainViewModel
+    @ObservedObject private var appLock = AppLockManager.shared
+
+    @State private var showingSetPinSheet: Bool = false
+    @State private var newPinInput: String = ""
+    @State private var statusBannerMessage: String? = nil
+
+    var body: some View {
+        Form {
+            SettingsStatusBanner(message: $statusBannerMessage)
+
+            Section("Elementi privati") {
+                HStack {
+                    Label(
+                        viewModel.privateUnlocked ? "Elementi privati sbloccati" : "Elementi privati bloccati",
+                        systemImage: viewModel.privateUnlocked ? "lock.open.fill" : "lock.fill"
+                    )
+                    Spacer()
+                    Button(viewModel.privateUnlocked ? "Blocca" : "Sblocca") {
+                        if viewModel.privateUnlocked {
+                            viewModel.lockPrivateItems()
+                        } else {
+                            viewModel.unlockPrivateItems()
+                        }
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+
+            Section("PIN e blocco dell'app") {
+                if appLock.hasPin {
+                    Toggle("Blocca l'intera app con PIN", isOn: Binding(
+                        get: { appLock.appLockEnabled },
+                        set: { appLock.setAppLockEnabled($0) }
+                    ))
+
+                    if appLock.canUseBiometrics() {
+                        Toggle("Sblocco rapido con Face ID / Touch ID", isOn: Binding(
+                            get: { appLock.biometricEnabled },
+                            set: { appLock.setBiometricEnabled($0) }
+                        ))
+                    }
+
+                    Button("Cambia PIN di sicurezza") {
+                        newPinInput = ""
+                        showingSetPinSheet = true
+                    }
+
+                    Button("Rimuovi PIN di sicurezza", role: .destructive) {
+                        appLock.removePin()
+                        statusBannerMessage = "PIN di sicurezza rimosso."
+                    }
+                } else {
+                    Button {
+                        newPinInput = ""
+                        showingSetPinSheet = true
+                    } label: {
+                        Label("Imposta PIN di sicurezza (4-8 cifre)", systemImage: "key.fill")
+                    }
+                }
+            }
+        }
+        .navigationTitle("Sicurezza e privacy")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingSetPinSheet) {
+            NavigationStack {
+                Form {
+                    Section("Nuovo PIN numerico (4-8 cifre)") {
+                        SecureField("Inserisci PIN", text: $newPinInput)
+                            .keyboardType(.numberPad)
+                    }
+                }
+                .navigationTitle("Imposta PIN")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Annulla") { showingSetPinSheet = false }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Salva") {
+                            appLock.setPin(newPinInput)
+                            showingSetPinSheet = false
+                            statusBannerMessage = "PIN di sicurezza configurato."
+                        }
+                        .disabled(newPinInput.count < 4 || newPinInput.count > 8)
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+    }
+}
+
+// MARK: - Feed e contenuti
+
+private struct ContentSettingsView: View {
+    @ObservedObject var viewModel: MainViewModel
+    var onOpenHighlights: () -> Void
+    @ObservedObject private var preferences = UiPreferences.shared
+
+    @State private var showingTrash: Bool = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Mostra 'Riscopri' in cima al feed", isOn: $preferences.resurfaceEnabled)
+                if preferences.resurfaceEnabled {
+                    Stepper("Elementi al giorno: \(preferences.resurfaceCount)", value: $preferences.resurfaceCount, in: 1...6)
+                    Stepper("Età minima: \(preferences.resurfaceMinDays) giorni", value: $preferences.resurfaceMinDays, in: 7...365, step: 7)
+                }
+            } header: {
+                Text("Riscopri")
+            } footer: {
+                Text("Ripropone ogni giorno alcuni elementi salvati da tempo.")
+            }
+
+            Section("Fonti") {
+                NavigationLink {
+                    RssFeedsManagementView(viewModel: viewModel)
+                } label: {
+                    Label("Feed RSS e Atom (\(RssFeeds.list().count))", systemImage: "dot.radiowaves.up.forward")
+                }
+            }
+
+            Section("Archivio") {
+                Button {
+                    onOpenHighlights()
+                } label: {
+                    Label("Evidenziazioni", systemImage: "highlighter")
+                }
+
+                Button {
+                    showingTrash = true
+                } label: {
+                    Label("Cestino", systemImage: "trash")
+                }
+            }
+        }
+        .navigationTitle("Feed e contenuti")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingTrash) {
+            TrashView(viewModel: viewModel)
+        }
+    }
+}
+
+// MARK: - Automazioni
+
+private struct AutomationSettingsView: View {
+    @ObservedObject var viewModel: MainViewModel
+
+    @State private var isCheckingLinks: Bool = false
+    @State private var linkCheckProgress: String = ""
+    @State private var statusBannerMessage: String? = nil
+
+    var body: some View {
+        Form {
+            SettingsStatusBanner(message: $statusBannerMessage)
+
+            Section {
+                NavigationLink {
+                    AutoRulesManagementView(viewModel: viewModel)
+                } label: {
+                    Label("Regole Automatiche (\(AutoRules.list().count))", systemImage: "wand.and.stars")
+                }
+            } footer: {
+                Text("Spostano in una cartella o aggiungono tag agli elementi che soddisfano una condizione.")
+            }
+
+            Section {
+                Button {
+                    guard !isCheckingLinks else { return }
+                    isCheckingLinks = true
+                    linkCheckProgress = "Avvio controllo…"
+                    Task {
+                        let (summary, _) = await LinkChecker.checkAllLinks { done, total in
+                            Task { @MainActor in
+                                linkCheckProgress = "\(done)/\(total)"
+                            }
+                        }
+                        await MainActor.run {
+                            isCheckingLinks = false
+                            viewModel.reloadAll()
+                            statusBannerMessage = "Controllati \(summary.checked) link: \(summary.broken) interrotti, \(summary.unreachable) non raggiungibili."
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Label("Verifica Link Interrotti (404 / Offline)", systemImage: "link.badge.plus")
+                        Spacer()
+                        if isCheckingLinks {
+                            Text(linkCheckProgress)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(isCheckingLinks)
+            } footer: {
+                Text("Controlla se i link salvati rispondono ancora e segnala quelli interrotti.")
+            }
+        }
+        .navigationTitle("Automazioni")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Backup e ripristino
+
+private struct BackupSettingsView: View {
+    @ObservedObject var viewModel: MainViewModel
+
     @State private var backupDocument: BackupFileDocument? = nil
     @State private var showingBackupExporter: Bool = false
     @State private var showingBackupImporter: Bool = false
@@ -39,415 +429,111 @@ struct SettingsView: View {
     @State private var hasBackupPassword: Bool = BackupPassword.isSet
     @State private var statusBannerMessage: String? = nil
 
-    // P2P & External Import/Export
-    @State private var showingP2PSync: Bool = false
-    @State private var showingTrash: Bool = false
-    @State private var showingExternalImporter: Bool = false
-    @State private var exportedShareUrl: URL? = nil
-    @State private var exportedShareLabel: String = ""
-
-    // Link checker state
-    @State private var isCheckingLinks: Bool = false
-    @State private var linkCheckProgress: String = ""
-
-    // App PIN setup sheet
-    @State private var showingSetPinSheet: Bool = false
-    @State private var newPinInput: String = ""
-
     var body: some View {
-        NavigationStack {
-            Form {
-                if let msg = statusBannerMessage {
+        Form {
+            SettingsStatusBanner(message: $statusBannerMessage)
+
+            Section {
+                Button {
+                    exportBackupNow()
+                } label: {
+                    Label("Esporta backup (.zip / PCLIPENC)", systemImage: "square.and.arrow.up")
+                }
+
+                Button {
+                    showingBackupImporter = true
+                } label: {
+                    Label("Ripristina backup da Android o iOS", systemImage: "square.and.arrow.down")
+                }
+            } footer: {
+                Text("I backup creati su Android (anche cifrati con PCLIPENC) sono compatibili con iOS e viceversa.")
+            }
+
+            Section {
+                Toggle("Proteggi i backup con password (PCLIPENC)", isOn: Binding(
+                    get: { hasBackupPassword },
+                    set: { enabled in
+                        if enabled {
+                            newBackupPassword = ""
+                            showingConfigurePasswordSheet = true
+                        } else {
+                            BackupPassword.set(nil)
+                            hasBackupPassword = false
+                            statusBannerMessage = "Password di backup rimossa."
+                        }
+                    }
+                ))
+            } footer: {
+                Text("La password viene salvata nel Keychain e usata per cifrare i backup.")
+            }
+        }
+        .navigationTitle("Backup e ripristino")
+        .navigationBarTitleDisplayMode(.inline)
+        .fileExporter(
+            isPresented: $showingBackupExporter,
+            document: backupDocument,
+            contentType: .zip,
+            defaultFilename: "paperclip_backup_\(Self.timestampString()).zip"
+        ) { result in
+            switch result {
+            case .success:
+                statusBannerMessage = "Backup esportato con successo."
+            case .failure(let err):
+                statusBannerMessage = "Errore esportazione: \(err.localizedDescription)"
+            }
+        }
+        .fileImporter(
+            isPresented: $showingBackupImporter,
+            allowedContentTypes: [.zip, .data, .item],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                handleImport(url: url, password: nil)
+            }
+        }
+        .alert("Backup protetto da password", isPresented: $showingRestorePasswordPrompt) {
+            SecureField("Password del backup", text: $restorePasswordInput)
+            Button("Annulla", role: .cancel) {
+                pendingImportUrl = nil
+                restorePasswordInput = ""
+            }
+            Button("Decrittografa e Ripristina") {
+                if let url = pendingImportUrl {
+                    handleImport(url: url, password: restorePasswordInput)
+                }
+            }
+        } message: {
+            Text("Inserisci la password con cui è stato cifrato questo backup (formato PCLIPENC).")
+        }
+        .sheet(isPresented: $showingConfigurePasswordSheet) {
+            NavigationStack {
+                Form {
+                    Section("Imposta password per i backup") {
+                        SecureField("Password", text: $newBackupPassword)
+                    }
                     Section {
-                        HStack {
-                            Image(systemName: "info.circle.fill")
-                                .foregroundColor(palette.primary)
-                            Text(msg)
-                                .font(.subheadline)
-                            Spacer()
-                            Button("OK") {
-                                statusBannerMessage = nil
-                            }
-                            .font(.caption.bold())
-                        }
+                        Text("La password viene salvata nel Keychain di iOS e usata per cifrare i backup in formato PCLIPENC compatibile con Android.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
                     }
                 }
-
-                if let shareUrl = exportedShareUrl {
-                    Section("File pronto per la condivisione") {
-                        ShareLink(item: shareUrl) {
-                            Label("Condividi / Salva \(exportedShareLabel)", systemImage: "square.and.arrow.up.fill")
-                                .font(.subheadline.bold())
+                .navigationTitle("Password di backup")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Annulla") {
+                            hasBackupPassword = BackupPassword.isSet
+                            showingConfigurePasswordSheet = false
                         }
                     }
-                }
-
-                // Aspetto
-                Section("Aspetto") {
-                    Picker("Modalità tema", selection: $preferences.themeMode) {
-                        ForEach(ThemeMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Salva") {
+                            BackupPassword.set(newBackupPassword)
+                            hasBackupPassword = BackupPassword.isSet
+                            showingConfigurePasswordSheet = false
+                            statusBannerMessage = "Password di backup salvata nel Keychain."
                         }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Picker("Colore dell'app", selection: $preferences.accentColor) {
-                        ForEach(AccentColor.allCases) { accent in
-                            HStack {
-                                if let hex = accent.seedHex {
-                                    Circle()
-                                        .fill(Color(hex: hex))
-                                        .frame(width: 14, height: 14)
-                                }
-                                Text(accent.label)
-                            }
-                            .tag(accent)
-                        }
-                    }
-                }
-
-                // Sicurezza & Protezione
-                Section("Sicurezza & Protezione") {
-                    HStack {
-                        Label(
-                            viewModel.privateUnlocked ? "Elementi privati sbloccati" : "Elementi privati bloccati",
-                            systemImage: viewModel.privateUnlocked ? "lock.open.fill" : "lock.fill"
-                        )
-                        Spacer()
-                        Button(viewModel.privateUnlocked ? "Blocca" : "Sblocca") {
-                            if viewModel.privateUnlocked {
-                                viewModel.lockPrivateItems()
-                            } else {
-                                viewModel.unlockPrivateItems()
-                            }
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                    }
-
-                    if appLock.hasPin {
-                        Toggle("Blocca l'intera app con PIN", isOn: Binding(
-                            get: { appLock.appLockEnabled },
-                            set: { appLock.setAppLockEnabled($0) }
-                        ))
-
-                        if appLock.canUseBiometrics() {
-                            Toggle("Sblocco rapido con Face ID / Touch ID", isOn: Binding(
-                                get: { appLock.biometricEnabled },
-                                set: { appLock.setBiometricEnabled($0) }
-                            ))
-                        }
-
-                        Button("Cambia PIN di sicurezza") {
-                            newPinInput = ""
-                            showingSetPinSheet = true
-                        }
-
-                        Button("Rimuovi PIN di sicurezza", role: .destructive) {
-                            appLock.removePin()
-                            statusBannerMessage = "PIN di sicurezza rimosso."
-                        }
-                    } else {
-                        Button {
-                            newPinInput = ""
-                            showingSetPinSheet = true
-                        } label: {
-                            Label("Imposta PIN di sicurezza (4-8 cifre)", systemImage: "key.fill")
-                        }
-                    }
-                }
-
-                // Contenuti
-                Section("Contenuti") {
-                    NavigationLink {
-                        RssFeedsManagementView(viewModel: viewModel)
-                    } label: {
-                        Label("Feed RSS e Atom (\(RssFeeds.list().count))", systemImage: "dot.radiowaves.up.forward")
-                    }
-
-                    Toggle("Mostra 'Riscopri' in cima al feed", isOn: $preferences.resurfaceEnabled)
-                    if preferences.resurfaceEnabled {
-                        Stepper("Elementi al giorno: \(preferences.resurfaceCount)", value: $preferences.resurfaceCount, in: 1...6)
-                        Stepper("Età minima: \(preferences.resurfaceMinDays) giorni", value: $preferences.resurfaceMinDays, in: 7...365, step: 7)
-                    }
-
-                    Button {
-                        onOpenHighlights()
-                    } label: {
-                        Label("Evidenziazioni", systemImage: "highlighter")
-                    }
-
-                    Button {
-                        showingTrash = true
-                    } label: {
-                        Label("Cestino", systemImage: "trash")
-                    }
-                }
-
-                // Automazioni
-                Section("Automazioni") {
-                    NavigationLink {
-                        AutoRulesManagementView(viewModel: viewModel)
-                    } label: {
-                        Label("Regole Automatiche (\(AutoRules.list().count))", systemImage: "wand.and.stars")
-                    }
-
-                    Button {
-                        guard !isCheckingLinks else { return }
-                        isCheckingLinks = true
-                        linkCheckProgress = "Avvio controllo…"
-                        Task {
-                            let (summary, _) = await LinkChecker.checkAllLinks { done, total in
-                                Task { @MainActor in
-                                    linkCheckProgress = "\(done)/\(total)"
-                                }
-                            }
-                            await MainActor.run {
-                                isCheckingLinks = false
-                                viewModel.reloadAll()
-                                statusBannerMessage = "Controllati \(summary.checked) link: \(summary.broken) interrotti, \(summary.unreachable) non raggiungibili."
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Label("Verifica Link Interrotti (404 / Offline)", systemImage: "link.badge.plus")
-                            Spacer()
-                            if isCheckingLinks {
-                                Text(linkCheckProgress)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isCheckingLinks)
-                }
-
-                // Sincronizzazione Wi-Fi P2P
-                Section {
-                    Button {
-                        showingP2PSync = true
-                    } label: {
-                        Label("Sincronizzazione Wi-Fi P2P (Android / iOS)", systemImage: "antenna.radiowaves.left.and.right")
-                    }
-                } header: {
-                    Text("Sincronizzazione Wi-Fi P2P")
-                } footer: {
-                    Text("Sincronizza l'archivio e le cartelle condivise direttamente via Wi-Fi con Android o altri iPhone senza passare dal cloud.")
-                }
-
-                // Backup e Ripristino Dati
-                Section {
-                    Button {
-                        exportBackupNow()
-                    } label: {
-                        Label("Esporta backup (.zip / PCLIPENC)", systemImage: "square.and.arrow.up")
-                    }
-
-                    Button {
-                        showingBackupImporter = true
-                    } label: {
-                        Label("Ripristina backup da Android o iOS", systemImage: "square.and.arrow.down")
-                    }
-
-                    Toggle("Proteggi i backup con password (PCLIPENC)", isOn: Binding(
-                        get: { hasBackupPassword },
-                        set: { enabled in
-                            if enabled {
-                                newBackupPassword = ""
-                                showingConfigurePasswordSheet = true
-                            } else {
-                                BackupPassword.set(nil)
-                                hasBackupPassword = false
-                                statusBannerMessage = "Password di backup rimossa."
-                            }
-                        }
-                    ))
-
-                    Button {
-                        showingExternalImporter = true
-                    } label: {
-                        Label("Importa da Google Keep / Pocket / Browser…", systemImage: "tray.and.arrow.down.fill")
-                    }
-
-                    Button {
-                        do {
-                            let res = try ArchiveExporter.writeMarkdownZip()
-                            exportedShareUrl = res.fileUrl
-                            exportedShareLabel = "Markdown/Obsidian (\(res.count) note)"
-                            statusBannerMessage = "Archivio Markdown generato (\(res.count) elementi). Tocca 'Condividi / Salva' in alto."
-                        } catch {
-                            statusBannerMessage = "Errore esportazione Markdown: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Esporta Markdown / Obsidian (.zip)", systemImage: "doc.zipper")
-                    }
-
-                    Button {
-                        do {
-                            let res = try ArchiveExporter.writeBookmarksHtml()
-                            exportedShareUrl = res.fileUrl
-                            exportedShareLabel = "Segnalibri (\(res.count) link)"
-                            statusBannerMessage = "File Segnalibri HTML generato (\(res.count) link). Tocca 'Condividi / Salva' in alto."
-                        } catch {
-                            statusBannerMessage = "Errore esportazione Segnalibri: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Esporta Segnalibri Browser (.html)", systemImage: "bookmark.fill")
-                    }
-
-                    Button {
-                        do {
-                            let res = try ArchiveExporter.writeReadwiseCsv()
-                            exportedShareUrl = res.fileUrl
-                            exportedShareLabel = "Evidenziazioni CSV (\(res.count))"
-                            statusBannerMessage = "File Readwise CSV generato (\(res.count) evidenziazioni). Tocca 'Condividi / Salva' in alto."
-                        } catch {
-                            statusBannerMessage = "Errore esportazione CSV: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Esporta Evidenziazioni Readwise (.csv)", systemImage: "highlighter")
-                    }
-                } header: {
-                    Text("Backup e Ripristino Dati")
-                } footer: {
-                    Text("I backup creati su Android (anche cifrati con PCLIPENC) sono compatibili con iOS e viceversa. Supporta Google Keep Takeout (.zip/.json), Pocket (.csv) e Segnalibri di Chrome/Safari/Firefox (.html).")
-                }
-
-                // Console di Debug e Diagnostica in-app
-                Section {
-                    NavigationLink {
-                        DiagnosticsLogView(logger: logger)
-                    } label: {
-                        HStack {
-                            Label("Console Diagnostica e Log", systemImage: "terminal.fill")
-                            Spacer()
-                            Text("\(logger.entries.count)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Sviluppo e Diagnostica")
-                } footer: {
-                    Text("Commit Android di riferimento: 99d8319 • Database SQLite compatibile Room v6")
-                }
-            }
-            .navigationTitle("Impostazioni")
-            .sheet(isPresented: $showingP2PSync) {
-                P2PSyncView()
-                    .environmentObject(viewModel)
-            }
-            .sheet(isPresented: $showingTrash) {
-                TrashView(viewModel: viewModel)
-            }
-            .sheet(isPresented: $showingSetPinSheet) {
-                NavigationStack {
-                    Form {
-                        Section("Nuovo PIN numerico (4-8 cifre)") {
-                            SecureField("Inserisci PIN", text: $newPinInput)
-                                .keyboardType(.numberPad)
-                        }
-                    }
-                    .navigationTitle("Imposta PIN")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Annulla") { showingSetPinSheet = false }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Salva") {
-                                appLock.setPin(newPinInput)
-                                showingSetPinSheet = false
-                                statusBannerMessage = "PIN di sicurezza configurato."
-                            }
-                            .disabled(newPinInput.count < 4 || newPinInput.count > 8)
-                        }
-                    }
-                }
-                .presentationDetents([.medium])
-            }
-            .fileExporter(
-                isPresented: $showingBackupExporter,
-                document: backupDocument,
-                contentType: .zip,
-                defaultFilename: "paperclip_backup_\(Self.timestampString()).zip"
-            ) { result in
-                switch result {
-                case .success:
-                    statusBannerMessage = "Backup esportato con successo."
-                case .failure(let err):
-                    statusBannerMessage = "Errore esportazione: \(err.localizedDescription)"
-                }
-            }
-            .fileImporter(
-                isPresented: $showingBackupImporter,
-                allowedContentTypes: [.zip, .data, .item],
-                allowsMultipleSelection: false
-            ) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    handleImport(url: url, password: nil)
-                }
-            }
-            .fileImporter(
-                isPresented: $showingExternalImporter,
-                allowedContentTypes: [.zip, .json, .commaSeparatedText, .html, .text, .item],
-                allowsMultipleSelection: false
-            ) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    do {
-                        let res = try ExternalImporter.importFromUrl(url)
-                        viewModel.reloadAll()
-                        viewModel.indexPendingItemsInBackground()
-                        statusBannerMessage = "Importati \(res.imported) elementi (\(res.skipped) ignorati o duplicati)."
-                    } catch {
-                        statusBannerMessage = "Errore importazione: \(error.localizedDescription)"
-                    }
-                }
-            }
-            .alert("Backup protetto da password", isPresented: $showingRestorePasswordPrompt) {
-                SecureField("Password del backup", text: $restorePasswordInput)
-                Button("Annulla", role: .cancel) {
-                    pendingImportUrl = nil
-                    restorePasswordInput = ""
-                }
-                Button("Decrittografa e Ripristina") {
-                    if let url = pendingImportUrl {
-                        handleImport(url: url, password: restorePasswordInput)
-                    }
-                }
-            } message: {
-                Text("Inserisci la password con cui è stato cifrato questo backup (formato PCLIPENC).")
-            }
-            .sheet(isPresented: $showingConfigurePasswordSheet) {
-                NavigationStack {
-                    Form {
-                        Section("Imposta password per i backup") {
-                            SecureField("Password", text: $newBackupPassword)
-                        }
-                        Section {
-                            Text("La password viene salvata nel Keychain di iOS e usata per cifrare i backup in formato PCLIPENC compatibile con Android.")
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .navigationTitle("Password di backup")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Annulla") {
-                                hasBackupPassword = BackupPassword.isSet
-                                showingConfigurePasswordSheet = false
-                            }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Salva") {
-                                BackupPassword.set(newBackupPassword)
-                                hasBackupPassword = BackupPassword.isSet
-                                showingConfigurePasswordSheet = false
-                                statusBannerMessage = "Password di backup salvata nel Keychain."
-                            }
-                            .disabled(newBackupPassword.isEmpty)
-                        }
+                        .disabled(newBackupPassword.isEmpty)
                     }
                 }
             }
@@ -491,6 +577,103 @@ struct SettingsView: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd_HHmmss"
         return fmt.string(from: Date())
+    }
+}
+
+// MARK: - Importa ed esporta
+
+private struct ImportExportSettingsView: View {
+    @ObservedObject var viewModel: MainViewModel
+
+    @State private var showingExternalImporter: Bool = false
+    @State private var exportedShareUrl: URL? = nil
+    @State private var exportedShareLabel: String = ""
+    @State private var statusBannerMessage: String? = nil
+
+    var body: some View {
+        Form {
+            SettingsStatusBanner(message: $statusBannerMessage)
+
+            if let shareUrl = exportedShareUrl {
+                Section("File pronto per la condivisione") {
+                    ShareLink(item: shareUrl) {
+                        Label("Condividi / Salva \(exportedShareLabel)", systemImage: "square.and.arrow.up.fill")
+                            .font(.subheadline.bold())
+                    }
+                }
+            }
+
+            Section {
+                Button {
+                    showingExternalImporter = true
+                } label: {
+                    Label("Importa da Google Keep / Pocket / Browser…", systemImage: "tray.and.arrow.down.fill")
+                }
+            } header: {
+                Text("Importa")
+            } footer: {
+                Text("Supporta Google Keep Takeout (.zip/.json), Pocket (.csv) e Segnalibri di Chrome/Safari/Firefox (.html).")
+            }
+
+            Section("Esporta") {
+                Button {
+                    do {
+                        let res = try ArchiveExporter.writeMarkdownZip()
+                        exportedShareUrl = res.fileUrl
+                        exportedShareLabel = "Markdown/Obsidian (\(res.count) note)"
+                        statusBannerMessage = "Archivio Markdown generato (\(res.count) elementi). Tocca 'Condividi / Salva' in alto."
+                    } catch {
+                        statusBannerMessage = "Errore esportazione Markdown: \(error.localizedDescription)"
+                    }
+                } label: {
+                    Label("Esporta Markdown / Obsidian (.zip)", systemImage: "doc.zipper")
+                }
+
+                Button {
+                    do {
+                        let res = try ArchiveExporter.writeBookmarksHtml()
+                        exportedShareUrl = res.fileUrl
+                        exportedShareLabel = "Segnalibri (\(res.count) link)"
+                        statusBannerMessage = "File Segnalibri HTML generato (\(res.count) link). Tocca 'Condividi / Salva' in alto."
+                    } catch {
+                        statusBannerMessage = "Errore esportazione Segnalibri: \(error.localizedDescription)"
+                    }
+                } label: {
+                    Label("Esporta Segnalibri Browser (.html)", systemImage: "bookmark.fill")
+                }
+
+                Button {
+                    do {
+                        let res = try ArchiveExporter.writeReadwiseCsv()
+                        exportedShareUrl = res.fileUrl
+                        exportedShareLabel = "Evidenziazioni CSV (\(res.count))"
+                        statusBannerMessage = "File Readwise CSV generato (\(res.count) evidenziazioni). Tocca 'Condividi / Salva' in alto."
+                    } catch {
+                        statusBannerMessage = "Errore esportazione CSV: \(error.localizedDescription)"
+                    }
+                } label: {
+                    Label("Esporta Evidenziazioni Readwise (.csv)", systemImage: "highlighter")
+                }
+            }
+        }
+        .navigationTitle("Importa ed esporta")
+        .navigationBarTitleDisplayMode(.inline)
+        .fileImporter(
+            isPresented: $showingExternalImporter,
+            allowedContentTypes: [.zip, .json, .commaSeparatedText, .html, .text, .item],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                do {
+                    let res = try ExternalImporter.importFromUrl(url)
+                    viewModel.reloadAll()
+                    viewModel.indexPendingItemsInBackground()
+                    statusBannerMessage = "Importati \(res.imported) elementi (\(res.skipped) ignorati o duplicati)."
+                } catch {
+                    statusBannerMessage = "Errore importazione: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 }
 
