@@ -91,6 +91,9 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
     private let trustedDevices = TrustedDevices.shared
     private let sharedFolders = SharedFolders.shared
     private let merger = ArchiveMerger()
+    /// Le sincronizzazioni girano una alla volta, così due merge non scrivono insieme sul database.
+    private let syncQueue = DispatchQueue(label: "com.paperclip.p2p.sync", qos: .userInitiated)
+    private var pendingChangeSync: DispatchWorkItem?
     var onArchiveUpdated: (() -> Void)?
 
     private override init() {
@@ -303,7 +306,7 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
             updateStatus("Associa prima \(peer.name) per sincronizzare l'intero archivio.")
             return
         }
-        DispatchQueue.global(qos: .userInitiated).async {
+        syncQueue.async {
             DispatchQueue.main.async { self.isSyncing = true }
             self.updateStatus("Sincronizzazione in corso con \(peer.name)…")
             defer { DispatchQueue.main.async { self.isSyncing = false } }
@@ -393,8 +396,33 @@ final class P2PSyncManager: NSObject, ObservableObject, NetServiceBrowserDelegat
         incomingInvites.removeAll { $0.shareId == invite.shareId }
     }
 
+    /// Chiamato dopo ogni creazione, modifica o eliminazione di un elemento: se almeno un dispositivo
+    /// associato (o partner di una cartella condivisa) è raggiungibile, avvia la sincronizzazione.
+    /// Le modifiche ravvicinate vengono raggruppate in un'unica sincronizzazione.
+    func scheduleSyncAfterLocalChange() {
+        DispatchQueue.main.async {
+            guard self.isServerRunning else { return }
+            self.pendingChangeSync?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.syncConnectedPeers() }
+            self.pendingChangeSync = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        }
+    }
+
+    private func syncConnectedPeers() {
+        let trustedPeers = discoveredPeers.filter { trustedDevices.byId($0.deviceId) != nil }
+        let sharePartners = discoveredPeers.filter { peer in
+            trustedDevices.byId(peer.deviceId) == nil &&
+                sharedFolders.shares.contains { $0.partners.contains { $0.deviceId == peer.deviceId } }
+        }
+        guard !trustedPeers.isEmpty || !sharePartners.isEmpty else { return }
+        AppLogger.shared.info("P2P", "Modifica locale: sincronizzazione automatica con \(trustedPeers.count + sharePartners.count) dispositivi")
+        trustedPeers.forEach { syncWithPeer($0) }
+        sharePartners.forEach { syncSharedFolders(with: $0) }
+    }
+
     func syncSharedFolders(with peer: PeerDevice) {
-        DispatchQueue.global(qos: .userInitiated).async {
+        syncQueue.async {
             for share in self.sharedFolders.shares {
                 guard let partner = share.partners.first(where: { $0.deviceId == peer.deviceId }) else { continue }
                 let path = "/share/\(share.id)"

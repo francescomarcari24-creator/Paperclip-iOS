@@ -195,6 +195,11 @@ final class MainViewModel: ObservableObject {
 
     // MARK: - Item CRUD & Actions
 
+    /// Dopo una creazione, modifica o eliminazione avvisa il P2P, che sincronizza se ci sono dispositivi collegati.
+    private func archiveChangedLocally() {
+        P2PSyncManager.shared.scheduleSyncAfterLocalChange()
+    }
+
     @discardableResult
     func saveItem(_ item: ArchiveItem, tagIds: [Int64]) -> Int64 {
         let isNew = item.id == 0
@@ -204,6 +209,7 @@ final class MainViewModel: ObservableObject {
 
         let savedId = database.saveItemWithTags(finalItem, tagIds: finalTags)
         reloadAll()
+        archiveChangedLocally()
         if let updated = allItemsWithDetails.first(where: { $0.id == savedId })?.item {
             scheduleReminderIfNeeded(for: updated)
             Task {
@@ -248,6 +254,7 @@ final class MainViewModel: ObservableObject {
         updated.updatedAt = ArchiveItem.nowMillis()
         database.insertOrReplaceItem(updated)
         reloadAll()
+        archiveChangedLocally()
     }
 
     func findLinkDuplicate(url: String?, excludeId: Int64 = 0) -> ArchiveItem? {
@@ -263,6 +270,7 @@ final class MainViewModel: ObservableObject {
         updated.updatedAt = ArchiveItem.nowMillis()
         database.insertOrReplaceItem(updated)
         reloadAll()
+        archiveChangedLocally()
     }
 
     func toggleArchive(_ entry: ArchiveItemWithDetails, showUndo: Bool = true) {
@@ -272,6 +280,7 @@ final class MainViewModel: ObservableObject {
         updated.updatedAt = ArchiveItem.nowMillis()
         database.insertOrReplaceItem(updated)
         reloadAll()
+        archiveChangedLocally()
         if showUndo {
             activeUndo = UndoAction(
                 message: updated.isArchived ? "Elemento archiviato" : "Ripristinato nel feed",
@@ -287,6 +296,7 @@ final class MainViewModel: ObservableObject {
         database.insertOrReplaceItem(updated)
         cancelReminder(itemId: updated.id)
         reloadAll()
+        archiveChangedLocally()
         if showUndo {
             activeUndo = UndoAction(
                 message: "Spostato nel cestino",
@@ -306,6 +316,7 @@ final class MainViewModel: ObservableObject {
                 database.insertOrReplaceItem(item)
                 scheduleReminderIfNeeded(for: item)
                 reloadAll()
+                archiveChangedLocally()
             }
         case .archived(let id, let previousArchived):
             if var item = allItemsWithDetails.first(where: { $0.id == id })?.item {
@@ -313,6 +324,7 @@ final class MainViewModel: ObservableObject {
                 item.updatedAt = ArchiveItem.nowMillis()
                 database.insertOrReplaceItem(item)
                 reloadAll()
+                archiveChangedLocally()
             }
         }
     }
@@ -328,6 +340,7 @@ final class MainViewModel: ObservableObject {
             }
         }
         reloadAll()
+        archiveChangedLocally()
     }
 
     func deleteForever(_ items: [ArchiveItem]) {
@@ -342,6 +355,7 @@ final class MainViewModel: ObservableObject {
             }
         }
         reloadAll()
+        archiveChangedLocally()
     }
 
     func purgeExpiredTrash() {
@@ -361,6 +375,7 @@ final class MainViewModel: ObservableObject {
         updated.updatedAt = ArchiveItem.nowMillis()
         database.insertOrReplaceItem(updated)
         reloadAll()
+        archiveChangedLocally()
     }
 
     func markOpened(_ item: ArchiveItem) {
@@ -378,6 +393,7 @@ final class MainViewModel: ObservableObject {
         updated.updatedAt = ArchiveItem.nowMillis()
         database.insertOrReplaceItem(updated)
         reloadAll()
+        archiveChangedLocally()
     }
 
     func setReminder(for item: ArchiveItem, minutes: Int?, days: Int) {
@@ -388,6 +404,7 @@ final class MainViewModel: ObservableObject {
         database.insertOrReplaceItem(updated)
         scheduleReminderIfNeeded(for: updated)
         reloadAll()
+        archiveChangedLocally()
     }
 
     // MARK: - Folders & Tags
